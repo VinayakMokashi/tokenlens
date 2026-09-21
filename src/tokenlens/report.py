@@ -27,7 +27,8 @@ def _severity_tag(severity: str) -> str:
 
 
 def render_findings(findings: Sequence[Finding], limit: Optional[int] = 10,
-                    show_provenance: bool = False) -> str:
+                    show_provenance: bool = False,
+                    more_hint: str = "use --all-findings to show every one") -> str:
     if not findings:
         return "No notable inefficiencies detected."
     lines: List[str] = []
@@ -42,7 +43,7 @@ def render_findings(findings: Sequence[Finding], limit: Optional[int] = 10,
         lines.append("")
     hidden = len(findings) - len(shown)
     if hidden > 0:
-        lines.append(f"      ... {hidden} more finding{'s' if hidden != 1 else ''} (use --all-findings to show every one)")
+        lines.append(f"      ... {hidden} more finding{'s' if hidden != 1 else ''} ({more_hint})")
     return "\n".join(lines).rstrip()
 
 
@@ -242,7 +243,8 @@ def render_summary(report: AggregateReport, findings: Sequence[Finding],
         out.append("")
 
     out.append(heading("Top findings across sessions", WIDTH, "-"))
-    out.append(render_findings(findings, findings_limit, show_provenance=True))
+    out.append(render_findings(findings, findings_limit, show_provenance=True,
+                               more_hint="raise --top N to show more"))
     out.append("")
     out.append(wrap(DISCLAIMER, WIDTH))
     return "\n".join(out)

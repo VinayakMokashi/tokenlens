@@ -14,15 +14,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
 
 from . import __version__
-from .analysis import aggregate, analyze_session
+from .analysis import aggregate, analyze_session, filter_sessions
 from .discovery import find_sessions, load_sessions, projects_root, resolve_target
 from .export import (
     aggregate_to_dict,
+    jsonable,
     render_markdown,
     session_report_to_dict,
     to_json,
@@ -68,17 +68,6 @@ def _root(args: argparse.Namespace) -> Path:
     return projects_root(getattr(args, "projects_dir", None))
 
 
-def _filter_sessions(sessions: Sequence[Session], project: Optional[str], days: Optional[int]) -> List[Session]:
-    result = list(sessions)
-    if project:
-        needle = project.lower()
-        result = [s for s in result if needle in (s.project_path or s.project_dir).lower()]
-    if days:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        result = [s for s in result if s.ended_at and s.ended_at >= cutoff]
-    return result
-
-
 def _all_findings(sessions: Sequence[Session], pricing: PricingTable,
                   thresholds: Optional[Thresholds] = None) -> List[Finding]:
     findings: List[Finding] = []
@@ -88,11 +77,14 @@ def _all_findings(sessions: Sequence[Session], pricing: PricingTable,
     return findings
 
 
-def _load_all(args: argparse.Namespace) -> List[Session]:
-    pricing = _pricing(args)
-    refs = find_sessions(_root(args))
-    sessions = load_sessions(refs, pricing)
-    return _filter_sessions(sessions, getattr(args, "project", None), getattr(args, "days", None))
+def _load_all(args: argparse.Namespace, pricing: PricingTable) -> List[Session]:
+    sessions = load_sessions(find_sessions(_root(args)), pricing)
+    filtered = filter_sessions(sessions, getattr(args, "project", None), getattr(args, "days", None))
+    if not filtered:
+        where = f" matching --project {args.project!r}" if getattr(args, "project", None) else ""
+        window = f" in the last {args.days} days" if getattr(args, "days", None) else ""
+        raise CliError(f"no sessions found under {_root(args)}{where}{window}")
+    return filtered
 
 
 # -- commands ------------------------------------------------------------------
@@ -126,12 +118,10 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 
 def cmd_sessions(args: argparse.Namespace) -> int:
-    sessions = _load_all(args)
-    if not sessions:
-        raise CliError(f"no sessions found under {_root(args)}")
-    report = aggregate(sessions, _pricing(args))
+    pricing = _pricing(args)
+    report = aggregate(_load_all(args, pricing), pricing)
     if args.json:
-        print(to_json(aggregate_to_dict(report, [])["sessions"][: args.limit]))
+        print(to_json(jsonable(report.sessions[: args.limit])))
     else:
         print(render_sessions_table(report, limit=args.limit))
     return 0
@@ -139,9 +129,7 @@ def cmd_sessions(args: argparse.Namespace) -> int:
 
 def cmd_summary(args: argparse.Namespace) -> int:
     pricing = _pricing(args)
-    sessions = _load_all(args)
-    if not sessions:
-        raise CliError(f"no sessions found under {_root(args)}")
+    sessions = _load_all(args, pricing)
     report = aggregate(sessions, pricing)
     findings = _all_findings(sessions, pricing)
     if args.json:
@@ -157,18 +145,17 @@ def cmd_summary(args: argparse.Namespace) -> int:
 
 def cmd_findings(args: argparse.Namespace) -> int:
     pricing = _pricing(args)
-    sessions = _load_all(args)
-    if not sessions:
-        raise CliError(f"no sessions found under {_root(args)}")
+    sessions = _load_all(args, pricing)
     findings = _all_findings(sessions, pricing)
     if args.min_dollars:
         findings = [f for f in findings if f.est_dollars_saved >= args.min_dollars]
     if args.json:
-        print(to_json([f.__dict__ for f in findings[: args.limit]]))
+        print(to_json(jsonable(findings[: args.limit])))
         return 0
     total = sum(s.total_cost_with_subagents for s in sessions)
     print(f"{len(findings)} findings across {len(sessions)} sessions ({money(total)} total spend)\n")
-    print(render_findings(findings, limit=args.limit, show_provenance=True))
+    print(render_findings(findings, limit=args.limit, show_provenance=True,
+                          more_hint="raise --limit N to show more"))
     return 0
 
 

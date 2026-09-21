@@ -16,8 +16,8 @@ tested without files.
 from __future__ import annotations
 
 from collections import OrderedDict, defaultdict
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .models import CostBreakdown, Session, TokenUsage, Turn
@@ -409,8 +409,7 @@ def aggregate(sessions: Sequence[Session], pricing: PricingTable = DEFAULT_TABLE
         if ended and (entry.last_active is None or ended > entry.last_active):
             entry.last_active = ended
 
-    summaries.sort(key=lambda s: (s.ended_at or datetime.min.replace(tzinfo=None)).timestamp()
-                   if s.ended_at else 0, reverse=True)
+    summaries.sort(key=lambda s: s.ended_at.timestamp() if s.ended_at else 0.0, reverse=True)
 
     return AggregateReport(
         sessions=summaries,
@@ -425,6 +424,22 @@ def aggregate(sessions: Sequence[Session], pricing: PricingTable = DEFAULT_TABLE
         what_if=what_if_costs(all_turns, pricing),
         has_estimated_pricing=any(t.pricing_is_estimate for t in all_turns),
     )
+
+
+def filter_sessions(sessions: Sequence[Session], project: Optional[str] = None,
+                    days: Optional[int] = None,
+                    now: Optional[datetime] = None) -> List[Session]:
+    """Keep sessions whose project path contains ``project`` (case-insensitive)
+    and whose last activity falls within the past ``days`` days. Shared by
+    the CLI and the dashboard so both apply the same window."""
+    result = list(sessions)
+    if project:
+        needle = project.lower()
+        result = [s for s in result if needle in (s.project_path or s.project_dir).lower()]
+    if days:
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=days)
+        result = [s for s in result if s.ended_at and s.ended_at >= cutoff]
+    return result
 
 
 def rolling_window(daily: Sequence[DailyCost], days: int) -> List[DailyCost]:

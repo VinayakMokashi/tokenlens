@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from conftest import assistant_line, compaction_line, text_block, usage
+from conftest import assistant_line, text_block, usage
 from tokenlens.analysis import (
     aggregate,
     analyze_session,
@@ -129,6 +129,25 @@ def test_aggregate_groups_by_project_and_model(sample_entries):
     # Newest session first.
     assert report.sessions[0].project_path == "/home/me/other"
     assert report.sessions[1].title == "Fix failing test in app.py"
+
+
+def test_filter_sessions_by_project_and_window(sample_entries):
+    from datetime import datetime, timezone
+
+    from tokenlens.analysis import filter_sessions
+
+    a = parse_entries(sample_entries)
+    b_entries = [assistant_line("z1", "2026-08-01T10:00:00Z", text_block("hi"), usage(output_tokens=10))]
+    for e in b_entries:
+        e["cwd"] = "/home/me/other"
+    b = parse_entries(b_entries, path="/tmp/other.jsonl")
+    now = datetime(2026, 9, 3, tzinfo=timezone.utc)
+
+    assert filter_sessions([a, b]) == [a, b]
+    assert filter_sessions([a, b], project="DEMO-APP") == [a]
+    assert filter_sessions([a, b], days=7, now=now) == [a]
+    assert filter_sessions([a, b], days=60, now=now) == [a, b]
+    assert filter_sessions([a, b], project="other", days=7, now=now) == []
 
 
 def test_rolling_window():
