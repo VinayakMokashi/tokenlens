@@ -29,7 +29,7 @@ First release.
   text, JSON, Markdown, and CSV output.
 - Optional Flask dashboard with context-growth charts, a daily spend chart,
   findings feed, JSON API, and in-memory upload.
-- Test suite (125 tests) built on synthetic transcripts; CI on Linux, macOS,
+- Test suite (128 tests) built on synthetic transcripts; CI on Linux, macOS,
   and Windows across Python 3.9, 3.12, and 3.13.
 
 ### Fixed (pre-release review)
@@ -53,3 +53,10 @@ First release.
   only the totals; rejected uploads are no longer kept as empty sessions;
   transcripts are parsed outside the store lock.
 - Finding text uses the same number formatting as the rest of the report.
+- Slash commands (`/clear`, `/model`) and their output are no longer counted
+  as prompts or used as session titles, and transcripts with no billed calls
+  are left out of listings.
+- Local `<synthetic>` placeholder messages are no longer counted as turns.
+- The dashboard and `summary` count subagent API calls alongside subagent
+  spend, so the call count matches the model breakdown.
+- Dashboard tables fit narrow windows and print without clipping.
