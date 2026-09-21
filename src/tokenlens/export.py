@@ -150,6 +150,8 @@ def aggregate_to_dict(report: AggregateReport, findings: Sequence[Finding]) -> D
         "schema_version": SCHEMA_VERSION,
         "session_count": report.session_count,
         "turn_count": report.turn_count,
+        "subagent_turn_count": report.subagent_turn_count,
+        "total_turn_count": report.total_turn_count,
         "total_cost": report.total_cost,
         "total_subagent_cost": report.total_subagent_cost,
         "usage": _usage_dict(report.usage),

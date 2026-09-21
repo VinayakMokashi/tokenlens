@@ -94,6 +94,16 @@ def test_load_sessions_includes_subagent_cost(root):
     assert [s.workflow_id for s in workflow_agents] == ["wf_1234abcd-56e"]
     assert workflow_agents[0].agent_id == "www"
     assert main.project_dir == "C--Users-Someone-Projects-demo-app"
+    from tokenlens.analysis import aggregate
+
+    report = aggregate(list(sessions.values()))
+    # Every API call behind the spend total is counted: 3 main-session turns
+    # plus 3 subagent turns (the orphan subagent counts as its own session).
+    assert report.turn_count == 3
+    assert report.subagent_turn_count == 3
+    assert report.total_turn_count == 6
+    assert report.total_turn_count == sum(m.turns for m in report.by_model)
+
     orphan = sessions["ccc"]
     assert orphan.is_subagent is True
     assert orphan.parent_session_id == "deadbeef-0000-0000-0000-000000000000"

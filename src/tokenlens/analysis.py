@@ -334,6 +334,8 @@ class SessionSummary:
     cost: float
     subagent_cost: float
     subagents: int
+    #: API calls made by this session's subagents (not included in ``turns``).
+    subagent_turns: int
     peak_context: int
     compactions: int
     api_errors: int
@@ -361,7 +363,17 @@ class AggregateReport:
 
     @property
     def turn_count(self) -> int:
+        """API calls in the main conversations."""
         return sum(s.turns for s in self.sessions)
+
+    @property
+    def subagent_turn_count(self) -> int:
+        return sum(s.subagent_turns for s in self.sessions)
+
+    @property
+    def total_turn_count(self) -> int:
+        """Every API call behind ``total_cost``, subagents included."""
+        return self.turn_count + self.subagent_turn_count
 
 
 def summarize_session(session: Session) -> SessionSummary:
@@ -376,6 +388,7 @@ def summarize_session(session: Session) -> SessionSummary:
         cost=session.total_cost,
         subagent_cost=session.subagent_cost,
         subagents=len(session.subagents),
+        subagent_turns=len(session.all_turns()) - len(session.turns),
         peak_context=max((t.context_tokens for t in session.turns), default=0),
         compactions=len(session.compactions),
         api_errors=len(session.api_errors),

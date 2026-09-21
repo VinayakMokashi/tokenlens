@@ -20,7 +20,7 @@
   <div class="kpi">
     <div class="label">API-equivalent spend</div>
     <div class="value">{{ report.total_cost|money }}</div>
-    <div class="sub">{{ report.session_count }} sessions &middot; {{ "{:,}".format(report.turn_count) }} API calls</div>
+    <div class="sub">{{ report.session_count }} sessions &middot; {{ "{:,}".format(report.total_turn_count) }} API calls{% if report.subagent_turn_count %}, {{ "{:,}".format(report.subagent_turn_count) }} of them by subagents{% endif %}</div>
   </div>
   <div class="kpi">
     <div class="label">Carrying context</div>

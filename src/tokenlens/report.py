@@ -180,7 +180,8 @@ def render_sessions_table(report: AggregateReport, limit: Optional[int] = None) 
         ])
     header = f"{report.session_count} sessions, {report.turn_count:,} API calls, {money(report.total_cost)} total"
     if report.total_subagent_cost:
-        header += f" (subagents {money(report.total_subagent_cost)})"
+        header += (f" (subagents: {report.subagent_turn_count:,} more API calls,"
+                   f" {money(report.total_subagent_cost)})")
     return header + "\n\n" + table(
         ["Session", "Last active", "Project", "Title", "Turns", "Peak ctx", "Cost", "Subagents"], rows,
         align=["l", "l", "l", "l", "r", "r", "r", "r"],
@@ -191,7 +192,10 @@ def render_summary(report: AggregateReport, findings: Sequence[Finding],
                    findings_limit: Optional[int] = 10, days_label: str = "") -> str:
     out: List[str] = []
     out.append(heading(f"Claude Code usage summary{days_label}", WIDTH))
-    out.append(f"Sessions: {report.session_count}   API calls: {report.turn_count:,}   "
+    calls = f"{report.total_turn_count:,}"
+    if report.subagent_turn_count:
+        calls += f" ({report.subagent_turn_count:,} by subagents)"
+    out.append(f"Sessions: {report.session_count}   API calls: {calls}   "
                f"Total: {money(report.total_cost)}" +
                (f"   (subagents {money(report.total_subagent_cost)}, {pct(report.total_subagent_cost / report.total_cost)})"
                 if report.total_cost and report.total_subagent_cost else ""))
