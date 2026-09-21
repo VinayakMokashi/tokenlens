@@ -20,9 +20,11 @@ Transcript format, as observed in Claude Code 2.x:
   (``:``, ``/``, ``\\``, spaces, and ``_`` all become ``-``), so ``cwd``
   is always preferred.
 - Subagent transcripts live at
-  ``<project-dir>/<session-id>/subagents/agent-<id>.jsonl`` and carry
-  ``isSidechain: true`` plus an ``agentId``. Their cost is real and is
-  attached to the parent session.
+  ``<project-dir>/<session-id>/subagents/agent-<id>.jsonl``, or one level
+  deeper at ``.../subagents/workflows/wf_<id>/agent-<id>.jsonl`` when the
+  Workflow tool spawned them. They carry ``isSidechain: true`` plus an
+  ``agentId``. Their cost is real and is attached to the parent session;
+  on a machine that uses workflows they can outweigh the main sessions.
 
 Files are read as UTF-8 with replacement so a stray byte never aborts an
 analysis, and malformed lines are counted and skipped rather than raised.
@@ -312,6 +314,9 @@ class _Builder:
             elif block_type == "text":
                 turn.text_chars += len(block.get("text") or "")
             elif block_type == "tool_use":
+                block_id = str(block.get("id") or "")
+                if block_id and any(c.id == block_id for c in turn.tool_calls):
+                    continue  # same block written on a later line of this message
                 tool_input = block.get("input")
                 try:
                     input_chars = len(json.dumps(tool_input, ensure_ascii=False)) if tool_input else 0
@@ -385,6 +390,18 @@ def subagent_dir_for(path: Path) -> Path:
     return path.with_suffix("") / "subagents"
 
 
+def workflow_id_for(sub_path: Path, sub_dir: Path) -> str:
+    """Workflow-spawned agents sit under ``subagents/workflows/wf_<id>/``."""
+    try:
+        parts = sub_path.relative_to(sub_dir).parts
+    except ValueError:
+        return ""
+    for part in parts[:-1]:
+        if part.startswith("wf_"):
+            return part
+    return ""
+
+
 def parse_session(path: str, pricing: PricingTable = DEFAULT_TABLE,
                   include_subagents: bool = True) -> Session:
     """Parse one transcript file, attaching its subagent transcripts."""
@@ -398,9 +415,10 @@ def parse_session(path: str, pricing: PricingTable = DEFAULT_TABLE,
     if include_subagents and not session.is_subagent:
         sub_dir = subagent_dir_for(file_path)
         if sub_dir.is_dir():
-            for sub_path in sorted(sub_dir.glob("*.jsonl")):
+            for sub_path in sorted(sub_dir.rglob("*.jsonl")):
                 sub = parse_session(str(sub_path), pricing, include_subagents=False)
                 sub.is_subagent = True
+                sub.workflow_id = workflow_id_for(sub_path, sub_dir)
                 sub.parent_session_id = sub.parent_session_id or session.session_id
                 if not sub.agent_id:
                     stem = sub_path.stem

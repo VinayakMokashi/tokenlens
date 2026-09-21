@@ -209,6 +209,9 @@ class Session:
     user_prompt_count: int = 0
     is_subagent: bool = False
     agent_id: str = ""
+    #: Set for subagents spawned by the Workflow tool, whose transcripts sit
+    #: under ``subagents/workflows/wf_<id>/``.
+    workflow_id: str = ""
     parent_session_id: str = ""
     subagents: List["Session"] = field(default_factory=list)
     #: Set by the parser when lines could not be decoded as JSON.

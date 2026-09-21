@@ -193,6 +193,29 @@ def test_subagents_are_attached_to_parent(tmp_path):
     assert len(session.all_turns()) == 2
 
 
+def test_workflow_subagents_are_found_two_levels_deep(tmp_path):
+    project_dir = tmp_path / "proj"
+    main_path = write_jsonl(project_dir / f"{SESSION_ID}.jsonl", [
+        assistant_line("m1", "2026-09-01T10:00:00Z", text_block("main"), usage(output_tokens=10)),
+    ])
+    wf_dir = project_dir / SESSION_ID / "subagents" / "workflows" / "wf_deadbeef-123"
+    write_jsonl(wf_dir / "agent-a1.jsonl", [
+        assistant_line("s1", "2026-09-01T10:00:30Z", text_block("sub"), usage(output_tokens=10)),
+    ])
+    write_jsonl(wf_dir / "agent-a2.jsonl", [
+        assistant_line("s2", "2026-09-01T10:00:31Z", text_block("sub"), usage(output_tokens=10)),
+    ])
+    write_jsonl(project_dir / SESSION_ID / "subagents" / "agent-direct.jsonl", [
+        assistant_line("s3", "2026-09-01T10:00:32Z", text_block("sub"), usage(output_tokens=10)),
+    ])
+    session = parse_session(str(main_path))
+    assert len(session.subagents) == 3
+    by_agent = {s.agent_id: s for s in session.subagents}
+    assert by_agent["a1"].workflow_id == "wf_deadbeef-123"
+    assert by_agent["a2"].workflow_id == "wf_deadbeef-123"
+    assert by_agent["direct"].workflow_id == ""
+
+
 def test_subagents_not_parsed_when_disabled(tmp_path):
     project_dir = tmp_path / "proj"
     main_path = write_jsonl(project_dir / f"{SESSION_ID}.jsonl", [
