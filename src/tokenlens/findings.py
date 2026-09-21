@@ -4,7 +4,9 @@ Each rule inspects a parsed :class:`~tokenlens.models.Session` and emits
 :class:`Finding` records with a severity, the turns involved, a plain
 explanation, and where possible an estimate of the dollars that could
 have been saved. Estimates are deliberately conservative and always
-explained in the finding text.
+explained in the finding text. Findings that only *explain* a cost
+(cache expiry after a break, a model switch, API errors) carry no
+saving so the headline "avoidable" figure stays honest.
 
 The estimates use one idea repeatedly: a token added to the context is
 paid for once as a cache write and then again on **every following turn
@@ -16,15 +18,21 @@ as if it were seen once.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .analysis import CHARS_PER_TOKEN, phases as split_phases
+from .formatting import money, tokens as fmt_tokens
 from .models import Session, Turn
 from .pricing import DEFAULT_TABLE, MILLION, PricingTable, Rates
 
 SEVERITY_ORDER = {"critical": 3, "warning": 2, "info": 1}
+
+#: Rules whose saving is the carry cost of specific tokens. Their savings
+#: overlap with a context_bloat finding covering the same turns.
+CARRY_RULES = ("large_tool_result", "duplicate_read")
 
 
 @dataclass
@@ -64,22 +72,6 @@ class Finding:
 # -- helpers -----------------------------------------------------------------
 
 
-def _fmt_money(value: float) -> str:
-    if value >= 100:
-        return f"${value:,.0f}"
-    if value >= 1:
-        return f"${value:,.2f}"
-    return f"${value:.3f}"
-
-
-def _fmt_tokens(value: int) -> str:
-    if value >= 1_000_000:
-        return f"{value / 1_000_000:.1f}M"
-    if value >= 1_000:
-        return f"{value / 1_000:.0f}K"
-    return str(value)
-
-
 def _phase_end_index(turn: Turn, phase_bounds: Sequence[Tuple[int, int]]) -> int:
     for first, last in phase_bounds:
         if first <= turn.index <= last:
@@ -87,17 +79,16 @@ def _phase_end_index(turn: Turn, phase_bounds: Sequence[Tuple[int, int]]) -> int
     return turn.index
 
 
-def _carry_cost(tokens: int, rates: Rates, carry_turns: int) -> float:
-    """Cost to write ``tokens`` once (1h tier, Claude Code's default) and
-    re-read them on ``carry_turns`` later turns."""
-    write = tokens / MILLION * rates.cache_write_1h
-    reads = tokens / MILLION * rates.cache_read * carry_turns
+def _carry_cost(token_count: int, rates: Rates, carry_turns: int) -> float:
+    """Cost to write ``token_count`` tokens once (1h tier, Claude Code's
+    default) and re-read them on ``carry_turns`` later turns."""
+    write = token_count / MILLION * rates.cache_write_1h
+    reads = token_count / MILLION * rates.cache_read * carry_turns
     return write + reads
 
 
-def _read_target_path(target: str) -> str:
-    """Strip the offset/limit annotation so partial and full reads of the
-    same file compare equal."""
+def _read_path(target: str) -> str:
+    """The file path part of a Read target, without the slice annotation."""
     return target.split(" [offset=")[0].strip()
 
 
@@ -109,13 +100,14 @@ def rule_large_tool_results(session: Session, pricing: PricingTable, th: Thresho
     out: List[Finding] = []
     for turn in session.turns:
         rates = pricing.resolve(turn.model, turn.speed).rates
-        carry_turns = _phase_end_index(turn, phase_bounds) - turn.index
+        phase_end = _phase_end_index(turn, phase_bounds)
+        carry_turns = phase_end - turn.index
         for call in turn.tool_calls:
             chars = call.result_chars or 0
             if chars < th.large_result_chars:
                 continue
-            tokens = chars // CHARS_PER_TOKEN
-            dollars = _carry_cost(tokens, rates, carry_turns)
+            token_count = chars // CHARS_PER_TOKEN
+            dollars = _carry_cost(token_count, rates, carry_turns)
             severity = "warning" if chars >= th.huge_result_chars else "info"
             hint = {
                 "Read": "Read a slice with offset/limit, or Grep for the lines you need.",
@@ -127,60 +119,64 @@ def rule_large_tool_results(session: Session, pricing: PricingTable, th: Thresho
             out.append(Finding(
                 rule="large_tool_result",
                 severity=severity,
-                title=f"{call.name} pulled ~{_fmt_tokens(tokens)} tokens into context",
+                title=f"{call.name} pulled ~{fmt_tokens(token_count)} tokens into context",
                 detail=(
                     f"Turn {turn.index}: {call.name}({call.target}) returned {chars:,} characters. "
                     f"Those tokens were written to cache once and then re-read on each of the "
                     f"{carry_turns} turns that followed before the next compaction, for about "
-                    f"{_fmt_money(dollars)} in total. {hint}"
+                    f"{money(dollars)} in total. {hint}"
                 ),
                 turns=[turn.index],
-                est_tokens_saved=tokens,
+                est_tokens_saved=token_count,
                 est_dollars_saved=dollars,
-                evidence={"tool": call.name, "target": call.target, "chars": chars, "carry_turns": carry_turns},
+                evidence={"tool": call.name, "target": call.target, "chars": chars,
+                          "carry_turns": carry_turns, "carry_until": phase_end},
             ))
     return out
 
 
 def rule_duplicate_reads(session: Session, pricing: PricingTable, th: Thresholds,
                          phase_bounds: Sequence[Tuple[int, int]]) -> List[Finding]:
-    """A Read of a file already read earlier, with no Edit/Write to that
-    file in between, re-sends content that is still in the context."""
+    """A Read with the *same target* (path and slice) as an earlier Read,
+    with no Edit/Write to that file in between, re-sends content that is
+    still in the context. Two different slices of one file are not
+    duplicates; the large-result rule actively recommends slicing."""
     out: List[Finding] = []
     last_read_turn: Dict[str, int] = {}
     for turn in session.turns:
         rates = pricing.resolve(turn.model, turn.speed).rates
-        carry_turns = _phase_end_index(turn, phase_bounds) - turn.index
+        phase_end = _phase_end_index(turn, phase_bounds)
+        carry_turns = phase_end - turn.index
         for call in turn.tool_calls:
             if call.name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-                last_read_turn.pop(_read_target_path(call.target), None)
+                edited = _read_path(call.target)
+                for key in [k for k in last_read_turn if _read_path(k) == edited]:
+                    del last_read_turn[key]
                 continue
-            if call.name != "Read":
-                continue
-            path = _read_target_path(call.target)
-            if not path:
+            if call.name != "Read" or not call.target:
                 continue
             chars = call.result_chars or 0
-            previous = last_read_turn.get(path)
+            previous = last_read_turn.get(call.target)
             if previous is not None and chars >= th.duplicate_read_min_chars:
-                tokens = chars // CHARS_PER_TOKEN
-                dollars = _carry_cost(tokens, rates, carry_turns)
+                token_count = chars // CHARS_PER_TOKEN
+                dollars = _carry_cost(token_count, rates, carry_turns)
                 out.append(Finding(
                     rule="duplicate_read",
                     severity="warning",
-                    title=f"Re-read an unchanged file ({_fmt_tokens(tokens)} tokens)",
+                    title=f"Re-read an unchanged file ({fmt_tokens(token_count)} tokens)",
                     detail=(
-                        f"Turn {turn.index} read {path} again although it was read in turn {previous} "
+                        f"Turn {turn.index} read {call.target} again although it was read in turn {previous} "
                         f"and not modified since. The earlier copy was still in context, so this added "
-                        f"{chars:,} duplicate characters worth about {_fmt_money(dollars)} over the rest "
+                        f"{chars:,} duplicate characters worth about {money(dollars)} over the rest "
                         f"of the phase. Reference the earlier read or ask for a specific line range."
                     ),
                     turns=[previous, turn.index],
-                    est_tokens_saved=tokens,
+                    est_tokens_saved=token_count,
                     est_dollars_saved=dollars,
-                    evidence={"path": path, "first_turn": previous, "chars": chars},
+                    evidence={"path": call.target, "first_turn": previous, "chars": chars,
+                              "carry_turns": carry_turns, "carry_until": phase_end},
                 ))
-            last_read_turn[path] = turn.index
+            last_read_turn[call.target] = turn.index
     return out
 
 
@@ -206,14 +202,14 @@ def rule_context_bloat(session: Session, pricing: PricingTable, th: Thresholds) 
         out.append(Finding(
             rule="context_bloat",
             severity=severity,
-            title=f"{len(run)} turns ran with context above {_fmt_tokens(th.context_bloat_tokens)} tokens",
+            title=f"{len(run)} turns ran with context above {fmt_tokens(th.context_bloat_tokens)} tokens",
             detail=(
                 f"Turns {run[0].index}-{run[-1].index} carried between "
-                f"{_fmt_tokens(min(t.context_tokens for t in run))} and {_fmt_tokens(peak)} tokens of context. "
-                f"Re-reading that context from cache cost {_fmt_money(carry)} across the run. "
-                f"Had the context been compacted to ~{_fmt_tokens(th.healthy_context_tokens)} tokens at turn "
+                f"{fmt_tokens(min(t.context_tokens for t in run))} and {fmt_tokens(peak)} tokens of context. "
+                f"Re-reading that context from cache cost {money(carry)} across the run. "
+                f"Had the context been compacted to ~{fmt_tokens(th.healthy_context_tokens)} tokens at turn "
                 f"{run[0].index} (with /compact, or by starting a fresh session for the next task), "
-                f"roughly {_fmt_money(excess_cost)} of that would have been avoided."
+                f"roughly {money(excess_cost)} of that would have been avoided."
             ),
             turns=[run[0].index, run[-1].index],
             est_tokens_saved=excess_tokens,
@@ -231,10 +227,13 @@ def rule_context_bloat(session: Session, pricing: PricingTable, th: Thresholds) 
     return out
 
 
-def rule_cache_expiry(session: Session, pricing: PricingTable, th: Thresholds) -> List[Finding]:
-    """A turn with zero cache reads but a large cache write after the first
-    turn means the cache had expired: the whole context was re-written at
-    the 1-hour write rate instead of being read at a tenth of the price."""
+def rule_context_rewrites(session: Session, pricing: PricingTable, th: Thresholds) -> List[Finding]:
+    """A turn after the first with zero cache reads but a large cache write
+    means the whole context was written again at the 1-hour rate instead
+    of being read at a tenth of the price. Two causes, reported
+    separately: the cache expired during a break, or the model changed
+    (prompt caches are per model). Neither is counted as avoidable; the
+    finding explains the cost so the user can weigh it."""
     out: List[Finding] = []
     previous: Optional[Turn] = None
     for turn in session.turns:
@@ -244,27 +243,46 @@ def rule_cache_expiry(session: Session, pricing: PricingTable, th: Thresholds) -
             rates = pricing.resolve(turn.model, turn.speed).rates
             as_read = u.cache_write_tokens / MILLION * rates.cache_read
             paid = turn.cost.cache_write_cost
-            gap = ""
-            if previous.timestamp and turn.timestamp:
-                delta: timedelta = turn.timestamp - previous.timestamp
-                hours = delta.total_seconds() / 3600
-                gap = f" after a {hours:.1f} hour gap" if hours >= 1 else f" after a {delta.total_seconds() / 60:.0f} minute gap"
-            out.append(Finding(
-                rule="cache_expired",
-                severity="info",
-                title=f"Cache expired: {_fmt_tokens(u.cache_write_tokens)} tokens re-written",
-                detail=(
-                    f"Turn {turn.index} resumed{gap}. The prompt cache had expired, so the entire "
-                    f"{u.cache_write_tokens:,}-token context was written again for {_fmt_money(paid)} "
-                    f"instead of {_fmt_money(as_read)} as a cache read. Cache entries live for at most "
-                    f"an hour; when you know you will be back sooner, keep the session warm, and when "
-                    f"you will not, this cost is unavoidable but worth knowing about."
-                ),
-                turns=[turn.index],
-                est_tokens_saved=0,
-                est_dollars_saved=max(paid - as_read, 0.0),
-                evidence={"rewritten_tokens": u.cache_write_tokens},
-            ))
+            extra = max(paid - as_read, 0.0)
+            evidence = {"rewritten_tokens": u.cache_write_tokens, "paid": paid,
+                        "as_cache_read": as_read, "extra_cost": extra}
+
+            if previous.model and turn.model and previous.model != turn.model:
+                out.append(Finding(
+                    rule="model_switch",
+                    severity="info",
+                    title=f"Model switch re-wrote {fmt_tokens(u.cache_write_tokens)} tokens of context",
+                    detail=(
+                        f"Turn {turn.index} moved from {previous.model} to {turn.model}. Prompt caches are "
+                        f"per model, so the whole {u.cache_write_tokens:,}-token context was written again "
+                        f"for {money(paid)} instead of {money(as_read)} as a cache read, about {money(extra)} "
+                        f"extra. Switching models is often worth it; just do it at a natural break rather "
+                        f"than back and forth."
+                    ),
+                    turns=[turn.index],
+                    evidence={**evidence, "from_model": previous.model, "to_model": turn.model},
+                ))
+            else:
+                gap = ""
+                if previous.timestamp and turn.timestamp:
+                    delta: timedelta = turn.timestamp - previous.timestamp
+                    hours = delta.total_seconds() / 3600
+                    gap = (f" after a {hours:.1f} hour gap" if hours >= 1
+                           else f" after a {delta.total_seconds() / 60:.0f} minute gap")
+                out.append(Finding(
+                    rule="cache_expired",
+                    severity="info",
+                    title=f"Cache expired: {fmt_tokens(u.cache_write_tokens)} tokens re-written",
+                    detail=(
+                        f"Turn {turn.index} resumed{gap}. The prompt cache had expired, so the entire "
+                        f"{u.cache_write_tokens:,}-token context was written again for {money(paid)} "
+                        f"instead of {money(as_read)} as a cache read, about {money(extra)} extra. Cache "
+                        f"entries live for at most an hour; after a long break this cost is unavoidable, "
+                        f"but when you know you will be back within the hour, keep the session warm."
+                    ),
+                    turns=[turn.index],
+                    evidence=evidence,
+                ))
         previous = turn
     return out
 
@@ -327,7 +345,9 @@ def rule_thinking_share(session: Session, th: Thresholds) -> List[Finding]:
     output = session.usage.output_tokens
     if output < 5_000:
         return []
-    thinking_tokens = sum(t.thinking_chars for t in session.turns) // CHARS_PER_TOKEN
+    # Thinking is billed as output; the character-based estimate can
+    # overshoot on dense text, so never claim more than 100%.
+    thinking_tokens = min(sum(t.thinking_chars for t in session.turns) // CHARS_PER_TOKEN, output)
     share = thinking_tokens / output if output else 0.0
     if share < th.thinking_share_warn:
         return []
@@ -342,8 +362,8 @@ def rule_thinking_share(session: Session, th: Thresholds) -> List[Finding]:
         severity="info",
         title=f"About {share:.0%} of output tokens were thinking",
         detail=(
-            f"Roughly {_fmt_tokens(thinking_tokens)} of {_fmt_tokens(output)} output tokens were extended "
-            f"thinking (about {_fmt_money(thinking_cost)}). Effort levels used: {effort_text}. Thinking is "
+            f"Roughly {fmt_tokens(thinking_tokens)} of {fmt_tokens(output)} output tokens were extended "
+            f"thinking (about {money(thinking_cost)}). Effort levels used: {effort_text}. Thinking is "
             f"valuable on hard problems; for routine edits and mechanical steps a lower effort setting "
             f"(/effort or the model picker) cuts this without hurting results."
         ),
@@ -363,8 +383,8 @@ def rule_subagent_share(session: Session, th: Thresholds) -> List[Finding]:
         severity="info",
         title=f"Subagents accounted for {share:.0%} of this session's cost",
         detail=(
-            f"{len(session.subagents)} subagent transcripts cost {_fmt_money(session.subagent_cost)} of the "
-            f"{_fmt_money(total)} total. Subagents start with a fresh context, which is cheap per turn, "
+            f"{len(session.subagents)} subagent transcripts cost {money(session.subagent_cost)} of the "
+            f"{money(total)} total. Subagents start with a fresh context, which is cheap per turn, "
             f"but each one re-reads the files it needs. Check that parallel agents are not all reading the "
             f"same large files, and prefer a cheaper model for mechanical sub-tasks."
         ),
@@ -401,7 +421,7 @@ def detect_findings(session: Session, pricing: PricingTable = DEFAULT_TABLE,
     findings += rule_context_bloat(session, pricing, th)
     findings += rule_duplicate_reads(session, pricing, th, bounds)
     findings += rule_large_tool_results(session, pricing, th, bounds)
-    findings += rule_cache_expiry(session, pricing, th)
+    findings += rule_context_rewrites(session, pricing, th)
     findings += rule_error_streaks(session, th)
     findings += rule_thinking_share(session, th)
     findings += rule_subagent_share(session, th)
@@ -416,16 +436,27 @@ def detect_findings(session: Session, pricing: PricingTable = DEFAULT_TABLE,
 
 
 def total_estimated_savings(findings: Sequence[Finding]) -> float:
-    """Sum of savings from rules that do not overlap.
+    """Sum of savings without double counting.
 
-    context_bloat already prices every excess token in its run, so the
-    per-result rules (which count carry cost for the same turns) are not
-    added on top of it when a bloat finding exists.
+    A context_bloat finding already prices every excess token carried
+    across its turn range, so a large_tool_result or duplicate_read whose
+    carry window overlaps that range *in the same session* is not added
+    on top. Findings from other sessions, or from turns outside the bloat
+    range, count in full. Works on a single session's findings and on a
+    pooled cross-session list alike.
     """
-    has_bloat = any(f.rule == "context_bloat" for f in findings)
+    bloat_ranges: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
+    for f in findings:
+        if f.rule == "context_bloat" and len(f.turns) >= 2:
+            bloat_ranges[f.session_id].append((f.turns[0], f.turns[-1]))
+
     total = 0.0
     for f in findings:
-        if has_bloat and f.rule in ("large_tool_result", "duplicate_read"):
-            continue
+        if f.rule in CARRY_RULES and f.turns:
+            origin = f.turns[-1]
+            carry_until = int(f.evidence.get("carry_until", origin))  # type: ignore[arg-type]
+            if any(origin <= last and carry_until >= first
+                   for first, last in bloat_ranges.get(f.session_id, ())):
+                continue
         total += f.est_dollars_saved
     return total

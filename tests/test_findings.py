@@ -55,6 +55,30 @@ def test_sample_session_findings(sample_entries):
     assert ranks == sorted(ranks, reverse=True)
 
 
+def test_different_slices_of_one_file_are_not_duplicates():
+    entries = []
+    for i, (offset, limit) in enumerate(((0, 200), (200, 200), (0, 200)), start=1):
+        entries.append(assistant_line(
+            f"m{i}", f"2026-09-01T10:00:{i:02d}Z",
+            tool_use_block(f"t{i}", "Read", {"file_path": "/big.py", "offset": offset, "limit": limit}),
+            usage(output_tokens=20)))
+        entries.append(tool_result_line(f"2026-09-01T10:00:{i:02d}.500Z", f"t{i}", "z" * 5_000))
+    findings = detect_findings(parse_entries(entries))
+    dups = [f for f in findings if f.rule == "duplicate_read"]
+    # Turn 2 reads a different slice: fine. Turn 3 repeats turn 1's slice: flagged.
+    assert len(dups) == 1
+    assert dups[0].turns == [1, 3]
+
+
+def test_thinking_share_never_exceeds_100_percent():
+    # Dense text: 40K chars of thinking against only 8K output tokens.
+    entries = [assistant_line("m1", "2026-09-01T10:00:00Z", thinking_block("t" * 40_000),
+                              usage(output_tokens=8_000), effort="max")]
+    think = next(f for f in detect_findings(parse_entries(entries)) if f.rule == "thinking_share")
+    assert "About 100%" in think.title
+    assert think.evidence["thinking_tokens"] == 8_000
+
+
 def test_context_bloat_estimates_excess_carry():
     entries = []
     for i in range(1, 6):
@@ -102,8 +126,30 @@ def test_cache_expiry_detected_after_gap():
     assert len(expiry) == 1
     assert expiry[0].turns == [3]
     assert "2.5 hour gap" in expiry[0].detail
-    # Paid 52,000 * $10/M = $0.52 instead of 52,000 * $0.50/M = $0.026
-    assert expiry[0].est_dollars_saved == pytest.approx(0.52 - 0.026)
+    # Paid 52,000 * $10/M = $0.52 instead of 52,000 * $0.50/M = $0.026. The
+    # extra is explained but not claimed as avoidable: after a long break
+    # the re-write cannot be prevented.
+    assert expiry[0].evidence["extra_cost"] == pytest.approx(0.52 - 0.026)
+    assert expiry[0].est_dollars_saved == 0.0
+    assert total_estimated_savings(findings) == 0.0
+
+
+def test_model_switch_is_reported_separately_from_cache_expiry():
+    entries = [
+        assistant_line("m1", "2026-09-01T10:00:00Z", text_block("a"),
+                       usage(input_tokens=10, output_tokens=10, cache_1h=50_000)),
+        # Two minutes later on a different model: caches are per model.
+        assistant_line("m2", "2026-09-01T10:02:00Z", text_block("b"),
+                       usage(input_tokens=10, output_tokens=10, cache_read=0, cache_1h=50_500),
+                       model="claude-sonnet-5"),
+    ]
+    findings = detect_findings(parse_entries(entries))
+    rules = _rules(findings)
+    assert "cache_expired" not in rules
+    switch = next(f for f in findings if f.rule == "model_switch")
+    assert switch.turns == [2]
+    assert "claude-opus-5 to claude-sonnet-5" in switch.detail
+    assert switch.est_dollars_saved == 0.0
 
 
 def test_first_turn_is_never_a_cache_miss():
@@ -190,8 +236,17 @@ def test_total_estimated_savings_avoids_double_counting(sample_entries):
             tool_use_block(f"t{i}", "Read", {"file_path": f"/f{i}.py"}),
             usage(input_tokens=10, output_tokens=50, cache_read=500_000, cache_1h=10_000)))
         entries.append(tool_result_line(f"2026-09-01T10:00:{i:02d}.500Z", f"t{i}", "y" * 40_000))
-    findings = detect_findings(parse_entries(entries))
+    bloated = parse_entries(entries)
+    findings = detect_findings(bloated)
     rules = _rules(findings)
     assert "context_bloat" in rules and "large_tool_result" in rules
     bloat = next(f for f in findings if f.rule == "context_bloat")
     assert total_estimated_savings(findings) == pytest.approx(bloat.est_dollars_saved)
+
+    # Pooled across sessions, a bloat finding in one session must not hide
+    # the per-result savings of another session.
+    other = parse_entries(sample_entries, path="/tmp/other.jsonl")
+    other_findings = detect_findings(other)
+    pooled = findings + other_findings
+    assert total_estimated_savings(pooled) == pytest.approx(
+        bloat.est_dollars_saved + total_estimated_savings(other_findings))
