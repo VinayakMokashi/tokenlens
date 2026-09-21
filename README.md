@@ -229,7 +229,8 @@ family fallbacks.
 | `context_bloat` | warning / critical | Runs of turns with context above 400K tokens | Cache reads above a 60K "healthy" context |
 | `duplicate_read` | warning | A file read again with no Edit/Write to it in between | Write + carry cost of the duplicate |
 | `large_tool_result` | info / warning | A single result over 16K characters | Write + carry cost until the next compaction |
-| `cache_expired` | info | Zero cache reads after the first turn: the cache lapsed during a break | Write cost minus what a read would have cost |
+| `cache_expired` | info | Zero cache reads after the first turn: the cache lapsed during a break | none (explained, not avoidable) |
+| `model_switch` | info | Zero cache reads because the model changed; prompt caches are per model | none (explained) |
 | `error_streak` | warning | Three or more consecutive failing tool calls | none (behavioural) |
 | `thinking_share` | info | Extended thinking above 60% of output tokens, with effort levels used | none (points at the effort setting) |
 | `subagent_share` | info | Subagents above 30% of session cost | none |
@@ -238,8 +239,10 @@ family fallbacks.
 
 Thresholds live in `tokenlens.findings.Thresholds` and can be tuned when
 calling the library directly. When a `context_bloat` finding exists, the
-per-result savings inside its turn range are not added to the total, so the
-headline "estimated avoidable" figure never double counts.
+per-result savings whose carry window overlaps its turn range in the same
+session are not added to the total, so the headline "estimated avoidable"
+figure never double counts, while findings from other sessions or other
+phases still count in full.
 
 ## Web dashboard
 

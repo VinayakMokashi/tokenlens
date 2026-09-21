@@ -29,5 +29,27 @@ First release.
   text, JSON, Markdown, and CSV output.
 - Optional Flask dashboard with context-growth charts, a daily spend chart,
   findings feed, JSON API, and in-memory upload.
-- Test suite (115 tests) built on synthetic transcripts; CI on Linux, macOS,
+- Test suite (125 tests) built on synthetic transcripts; CI on Linux, macOS,
   and Windows across Python 3.9, 3.12, and 3.13.
+
+### Fixed (pre-release review)
+
+- Version patterns such as `opus-4` no longer match later point releases
+  (`claude-opus-4-9`); unknown versions fall through to the flagged family
+  fallback instead of being priced as the base model with full confidence.
+- Cache-write cost is tracked per TTL tier (`cache_write_5m_cost`,
+  `cache_write_1h_cost`); the report's per-tier rows previously split one
+  total by token share, which is wrong when both tiers appear.
+- `total_estimated_savings` de-duplicates against context-bloat findings per
+  session and per turn range, so one bloated session no longer hides the
+  savings of every other session on the dashboard and in `summary --json`.
+- Cache expiry after a break is explained but no longer counted as
+  avoidable; a mid-session model switch (which also re-writes the cache) is
+  reported as its own `model_switch` finding instead of a false expiry.
+- Reading two different slices of one file is no longer flagged as a
+  duplicate read.
+- Thinking share is clamped at 100%.
+- The dashboard's day filter now scopes findings and the avoidable KPI, not
+  only the totals; rejected uploads are no longer kept as empty sessions;
+  transcripts are parsed outside the store lock.
+- Finding text uses the same number formatting as the rest of the report.
