@@ -6,7 +6,7 @@
 <p class="page-sub">
   <code>{{ s.project_path or s.project_dir }}</code> &middot; session <code>{{ s.session_id }}</code><br>
   {{ s.started_at|when }} to {{ s.ended_at|when }} &middot; active {{ s.active_duration()|duration }} (wall {{ s.wall_duration|duration }})
-  &middot; {{ report.turn_count }} API calls for {{ s.user_prompt_count }} prompts
+  &middot; {{ "{:,}".format(report.turn_count) }} API calls for {{ s.user_prompt_count }} prompts
   &middot; {{ s.subagents|length }} subagents &middot; {{ s.compactions|length }} compactions &middot; {{ s.api_errors|length }} API errors
   {% if s.models %}&middot; models: <code>{{ s.models|join(', ') }}</code>{% endif %}
   {% if s.git_branch %}&middot; branch <code>{{ s.git_branch }}</code>{% endif %}
@@ -51,8 +51,8 @@
       <tbody>
         {% set total = report.cost.total or 1 %}
         <tr><td>Cache read (carrying context)</td><td class="num">{{ report.usage.cache_read_tokens|tokens }}</td><td class="num">{{ report.cost.cache_read_cost|money }}</td><td class="num">{{ (report.cost.cache_read_cost / total)|pct }}</td></tr>
-        <tr><td>Cache write (1h) <span class="dim">2x input rate</span></td><td class="num">{{ report.usage.cache_write_1h_tokens|tokens }}</td><td class="num" colspan="2"></td></tr>
-        <tr><td>Cache write (5m) <span class="dim">1.25x input rate</span></td><td class="num">{{ report.usage.cache_write_5m_tokens|tokens }}</td><td class="num" colspan="2"></td></tr>
+        <tr><td>Cache write (1h) <span class="dim">2x input rate</span></td><td class="num">{{ report.usage.cache_write_1h_tokens|tokens }}</td><td class="num">{{ report.cost.cache_write_1h_cost|money }}</td><td class="num"></td></tr>
+        <tr><td>Cache write (5m) <span class="dim">1.25x input rate</span></td><td class="num">{{ report.usage.cache_write_5m_tokens|tokens }}</td><td class="num">{{ report.cost.cache_write_5m_cost|money }}</td><td class="num"></td></tr>
         <tr><td>Cache write (all)</td><td class="num">{{ report.usage.cache_write_tokens|tokens }}</td><td class="num">{{ report.cost.cache_write_cost|money }}</td><td class="num">{{ (report.cost.cache_write_cost / total)|pct }}</td></tr>
         <tr><td>Fresh input</td><td class="num">{{ report.usage.input_tokens|tokens }}</td><td class="num">{{ report.cost.input_cost|money }}</td><td class="num">{{ (report.cost.input_cost / total)|pct }}</td></tr>
         <tr><td>Output (incl. thinking)</td><td class="num">{{ report.usage.output_tokens|tokens }}</td><td class="num">{{ report.cost.output_cost|money }}</td><td class="num">{{ (report.cost.output_cost / total)|pct }}</td></tr>
@@ -66,7 +66,7 @@
       <thead><tr><th>Model</th><th class="num">Turns</th><th class="num">Context</th><th class="num">Output</th><th class="num">Cost</th></tr></thead>
       <tbody>
       {% for m in report.by_model %}
-        <tr><td class="mono">{{ m.model }}{% if m.is_estimate %} *{% endif %}</td><td class="num">{{ m.turns }}</td><td class="num">{{ m.usage.context_tokens|tokens }}</td><td class="num">{{ m.usage.output_tokens|tokens }}</td><td class="num">{{ m.cost.total|money }}</td></tr>
+        <tr><td class="mono">{{ m.model }}{% if m.is_estimate %} *{% endif %}</td><td class="num">{{ "{:,}".format(m.turns) }}</td><td class="num">{{ m.usage.context_tokens|tokens }}</td><td class="num">{{ m.usage.output_tokens|tokens }}</td><td class="num">{{ m.cost.total|money }}</td></tr>
       {% endfor %}
       </tbody>
     </table>

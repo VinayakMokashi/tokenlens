@@ -29,7 +29,7 @@ First release.
   text, JSON, Markdown, and CSV output.
 - Optional Flask dashboard with context-growth charts, a daily spend chart,
   findings feed, JSON API, and in-memory upload.
-- Test suite (128 tests) built on synthetic transcripts; CI on Linux, macOS,
+- Test suite (131 tests) built on synthetic transcripts; CI on Linux, macOS,
   and Windows across Python 3.9, 3.12, and 3.13.
 
 ### Fixed (pre-release review)
@@ -43,9 +43,12 @@ First release.
 - `total_estimated_savings` de-duplicates against context-bloat findings per
   session and per turn range, so one bloated session no longer hides the
   savings of every other session on the dashboard and in `summary --json`.
-- Cache expiry after a break is explained but no longer counted as
-  avoidable; a mid-session model switch (which also re-writes the cache) is
-  reported as its own `model_switch` finding instead of a false expiry.
+- Cache misses are explained but not counted as avoidable; a mid-session
+  model switch (which also re-writes the cache) is reported as its own
+  `model_switch` finding. The rule, now `cache_miss`, compares each call's
+  cache read with the previous call's context instead of requiring zero
+  reads, because Claude Code keeps a ~28K shared prefix cached even when the
+  conversation's cache is gone; the old test missed every real case.
 - Reading two different slices of one file is no longer flagged as a
   duplicate read.
 - Thinking share is clamped at 100%.
@@ -60,3 +63,8 @@ First release.
 - The dashboard and `summary` count subagent API calls alongside subagent
   spend, so the call count matches the model breakdown.
 - Dashboard tables fit narrow windows and print without clipping.
+- Workflow `journal.jsonl` files are no longer parsed as subagent
+  transcripts; only `agent-*.jsonl` files are.
+- A context-bloat run is no longer split in two by a single turn dipping
+  just under the threshold.
+- The session page shows the 1-hour and 5-minute cache-write costs.
