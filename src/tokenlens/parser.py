@@ -431,7 +431,9 @@ def parse_session(path: str, pricing: PricingTable = DEFAULT_TABLE,
     if include_subagents and not session.is_subagent:
         sub_dir = subagent_dir_for(file_path)
         if sub_dir.is_dir():
-            for sub_path in sorted(sub_dir.rglob("*.jsonl")):
+            # Only agent-*.jsonl are transcripts; workflow folders also hold a
+            # journal.jsonl of workflow events that carries no API calls.
+            for sub_path in sorted(sub_dir.rglob("agent-*.jsonl")):
                 sub = parse_session(str(sub_path), pricing, include_subagents=False)
                 sub.is_subagent = True
                 sub.workflow_id = workflow_id_for(sub_path, sub_dir)

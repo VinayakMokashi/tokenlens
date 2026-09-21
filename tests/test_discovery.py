@@ -28,6 +28,8 @@ def root(tmp_path: Path) -> Path:
     _session(proj_a / SESSION_ID / "subagents" / "agent-bbb.jsonl", "s2", "2026-09-01T10:00:40Z")
     _session(proj_a / SESSION_ID / "subagents" / "workflows" / "wf_1234abcd-56e" / "agent-www.jsonl",
              "s4", "2026-09-01T10:00:50Z")
+    write_jsonl(proj_a / SESSION_ID / "subagents" / "workflows" / "wf_1234abcd-56e" / "journal.jsonl",
+                [{"type": "started", "agentId": "www"}])
     _session(proj_b / "99999999-0000-0000-0000-000000000000.jsonl", "m2", "2026-09-05T10:00:00Z")
     # Orphaned subagent whose parent transcript is gone.
     _session(proj_b / "deadbeef-0000-0000-0000-000000000000" / "subagents" / "agent-ccc.jsonl",

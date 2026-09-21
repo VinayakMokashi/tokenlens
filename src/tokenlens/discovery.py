@@ -6,6 +6,9 @@ Layout under ``~/.claude/projects``::
     <encoded-project-dir>/<session-id>/subagents/agent-<agent-id>.jsonl
     <encoded-project-dir>/<session-id>/subagents/workflows/wf_<id>/agent-<agent-id>.jsonl
 
+Workflow folders also hold a ``journal.jsonl`` of workflow events; only
+``agent-*.jsonl`` files are transcripts.
+
 The encoded directory name is the project's working directory with every
 path separator, colon, space, and underscore replaced by ``-``. That is
 not reversible (``my-app`` and ``my_app`` collide), so the parser reads
@@ -107,7 +110,7 @@ def find_sessions(root: Optional[Path] = None) -> List[SessionRef]:
             ref = SessionRef(path=path, session_id=path.stem, project_dir=project_dir,
                              mtime=stat.st_mtime, size=stat.st_size)
             mains[_key(project_dir, ref.session_id)] = ref
-        elif len(rel) >= 4 and rel[2] == "subagents":
+        elif len(rel) >= 4 and rel[2] == "subagents" and path.name.startswith("agent-"):
             # Direct subagents sit right under subagents/; agents spawned by
             # the Workflow tool sit two levels deeper under workflows/wf_<id>/.
             parent_id = rel[1]

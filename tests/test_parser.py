@@ -223,6 +223,10 @@ def test_workflow_subagents_are_found_two_levels_deep(tmp_path):
     write_jsonl(project_dir / SESSION_ID / "subagents" / "agent-direct.jsonl", [
         assistant_line("s3", "2026-09-01T10:00:32Z", text_block("sub"), usage(output_tokens=10)),
     ])
+    # Workflow folders also hold a journal of workflow events; it is not a transcript.
+    write_jsonl(wf_dir / "journal.jsonl", [
+        {"type": "started", "agentId": "a1"}, {"type": "result", "agentId": "a1"},
+    ])
     session = parse_session(str(main_path))
     assert len(session.subagents) == 3
     by_agent = {s.agent_id: s for s in session.subagents}
