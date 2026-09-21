@@ -155,7 +155,7 @@ tr:last-child td { border-bottom: none; }
 tbody tr:hover td { background: var(--series-1-soft); }
 td .dim { color: var(--muted); }
 
-.bar-cell { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.bar-cell { display: flex; align-items: center; gap: 8px; min-width: 48px; }
 .bar-track { flex: 1; height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; }
 .bar-fill { height: 100%; background: var(--series-1); border-radius: 4px; }
 
@@ -200,6 +200,18 @@ td .dim { color: var(--muted); }
 .disclaimer { color: var(--muted); font-size: 12px; margin-top: 28px; }
 
 details summary { cursor: pointer; color: var(--series-1); font-weight: 500; }
+
+/* Printing (or "Save as PDF") has no horizontal scroll, so wide tables
+   must fit the page instead of being clipped. */
+@media print {
+  .nav-right, .filters, details summary { display: none; }
+  .table-scroll { overflow: visible; }
+  table { font-size: 11px; }
+  th, td { padding: 5px 6px; }
+  td.num, th.num { white-space: normal; }
+  .card, .kpi, .finding { break-inside: avoid; }
+  .container { max-width: none; padding: 0; }
+}
 
 @media (max-width: 640px) {
   .kpi .value { font-size: 22px; }
