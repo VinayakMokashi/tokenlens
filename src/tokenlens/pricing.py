@@ -91,34 +91,42 @@ class ModelSpec:
     fast_rates: Optional[Rates] = None
 
 
+# A version pattern must not match a *later* point release: "opus-4"
+# followed by "-9" is a different, unknown model that should fall through
+# to the flagged family fallback, not be priced as Opus 4 with full
+# confidence. ``\b`` alone gets this wrong because "4-9" has a word
+# boundary between the digit and the hyphen, so every version pattern
+# ends with END, a lookahead that rejects a following "-<digit>".
+END = r"(?!-\d)"
+
 # Ordered: most specific first. The final entries per family are the
 # fallbacks used when only the family name can be recognized.
 DEFAULT_MODELS: Tuple[ModelSpec, ...] = (
     ModelSpec("claude-fable-5-1", "Claude Fable 5.1", "fable",
-              r"(fable|mythos)-5-1\b",
+              r"(fable|mythos)-5-1" + END,
               Rates(10.0, 50.0, cache_read_multiplier=0.025)),
     ModelSpec("claude-fable-5", "Claude Fable 5", "fable",
-              r"(fable|mythos)-5\b|mythos-preview",
+              r"(fable|mythos)-5" + END + r"|mythos-preview",
               Rates(10.0, 50.0)),
     ModelSpec("claude-opus-5", "Claude Opus 5", "opus",
-              r"opus-5\b",
+              r"opus-5" + END,
               Rates(5.0, 25.0), fast_rates=Rates(10.0, 50.0)),
-    ModelSpec("claude-opus-4-8", "Claude Opus 4.8", "opus", r"opus-4-8\b", Rates(5.0, 25.0)),
-    ModelSpec("claude-opus-4-7", "Claude Opus 4.7", "opus", r"opus-4-7\b", Rates(5.0, 25.0)),
-    ModelSpec("claude-opus-4-6", "Claude Opus 4.6", "opus", r"opus-4-6\b", Rates(5.0, 25.0)),
-    ModelSpec("claude-opus-4-5", "Claude Opus 4.5", "opus", r"opus-4-5\b", Rates(5.0, 25.0)),
-    ModelSpec("claude-opus-4-1", "Claude Opus 4.1", "opus", r"opus-4-1\b", Rates(15.0, 75.0)),
-    ModelSpec("claude-opus-4-0", "Claude Opus 4", "opus", r"opus-4(-0)?\b", Rates(15.0, 75.0)),
-    ModelSpec("claude-3-opus", "Claude Opus 3", "opus", r"3-opus\b", Rates(15.0, 75.0)),
-    ModelSpec("claude-sonnet-5", "Claude Sonnet 5", "sonnet", r"sonnet-5\b", Rates(2.0, 10.0)),
-    ModelSpec("claude-sonnet-4-6", "Claude Sonnet 4.6", "sonnet", r"sonnet-4-6\b", Rates(3.0, 15.0)),
-    ModelSpec("claude-sonnet-4-5", "Claude Sonnet 4.5", "sonnet", r"sonnet-4-5\b", Rates(3.0, 15.0)),
-    ModelSpec("claude-sonnet-4-0", "Claude Sonnet 4", "sonnet", r"sonnet-4(-0)?\b", Rates(3.0, 15.0)),
-    ModelSpec("claude-3-7-sonnet", "Claude Sonnet 3.7", "sonnet", r"3-7-sonnet\b", Rates(3.0, 15.0)),
-    ModelSpec("claude-3-5-sonnet", "Claude Sonnet 3.5", "sonnet", r"3-5-sonnet\b", Rates(3.0, 15.0)),
-    ModelSpec("claude-haiku-4-5", "Claude Haiku 4.5", "haiku", r"haiku-4-5\b", Rates(1.0, 5.0)),
-    ModelSpec("claude-3-5-haiku", "Claude Haiku 3.5", "haiku", r"3-5-haiku\b", Rates(0.80, 4.0)),
-    ModelSpec("claude-3-haiku", "Claude Haiku 3", "haiku", r"3-haiku\b", Rates(0.25, 1.25)),
+    ModelSpec("claude-opus-4-8", "Claude Opus 4.8", "opus", r"opus-4-8" + END, Rates(5.0, 25.0)),
+    ModelSpec("claude-opus-4-7", "Claude Opus 4.7", "opus", r"opus-4-7" + END, Rates(5.0, 25.0)),
+    ModelSpec("claude-opus-4-6", "Claude Opus 4.6", "opus", r"opus-4-6" + END, Rates(5.0, 25.0)),
+    ModelSpec("claude-opus-4-5", "Claude Opus 4.5", "opus", r"opus-4-5" + END, Rates(5.0, 25.0)),
+    ModelSpec("claude-opus-4-1", "Claude Opus 4.1", "opus", r"opus-4-1" + END, Rates(15.0, 75.0)),
+    ModelSpec("claude-opus-4-0", "Claude Opus 4", "opus", r"opus-4(-0)?" + END, Rates(15.0, 75.0)),
+    ModelSpec("claude-3-opus", "Claude Opus 3", "opus", r"3-opus" + END, Rates(15.0, 75.0)),
+    ModelSpec("claude-sonnet-5", "Claude Sonnet 5", "sonnet", r"sonnet-5" + END, Rates(2.0, 10.0)),
+    ModelSpec("claude-sonnet-4-6", "Claude Sonnet 4.6", "sonnet", r"sonnet-4-6" + END, Rates(3.0, 15.0)),
+    ModelSpec("claude-sonnet-4-5", "Claude Sonnet 4.5", "sonnet", r"sonnet-4-5" + END, Rates(3.0, 15.0)),
+    ModelSpec("claude-sonnet-4-0", "Claude Sonnet 4", "sonnet", r"sonnet-4(-0)?" + END, Rates(3.0, 15.0)),
+    ModelSpec("claude-3-7-sonnet", "Claude Sonnet 3.7", "sonnet", r"3-7-sonnet" + END, Rates(3.0, 15.0)),
+    ModelSpec("claude-3-5-sonnet", "Claude Sonnet 3.5", "sonnet", r"3-5-sonnet" + END, Rates(3.0, 15.0)),
+    ModelSpec("claude-haiku-4-5", "Claude Haiku 4.5", "haiku", r"haiku-4-5" + END, Rates(1.0, 5.0)),
+    ModelSpec("claude-3-5-haiku", "Claude Haiku 3.5", "haiku", r"3-5-haiku" + END, Rates(0.80, 4.0)),
+    ModelSpec("claude-3-haiku", "Claude Haiku 3", "haiku", r"3-haiku" + END, Rates(0.25, 1.25)),
     # Family fallbacks: current-generation rates, flagged as estimates.
     ModelSpec("fable-family", "Fable (unrecognized version)", "fable", r"fable|mythos", Rates(10.0, 50.0)),
     ModelSpec("opus-family", "Opus (unrecognized version)", "opus", r"opus", Rates(5.0, 25.0)),

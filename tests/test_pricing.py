@@ -29,6 +29,14 @@ from tokenlens.pricing import (
         ("claude-3-5-haiku-20241022", "claude-3-5-haiku", "exact"),
         ("claude-sonnet-7", "sonnet-family", "family"),
         ("claude-opus-9-2", "opus-family", "family"),
+        # Later point releases of a known base must NOT match the base pattern.
+        ("claude-opus-4-9-20261001", "opus-family", "family"),
+        ("claude-opus-5-1", "opus-family", "family"),
+        ("claude-sonnet-4-7", "sonnet-family", "family"),
+        ("claude-fable-5-2", "fable-family", "family"),
+        ("claude-haiku-4-6", "haiku-family", "family"),
+        # ...but non-numeric suffixes such as aliases still resolve exactly.
+        ("claude-3-5-sonnet-latest", "claude-3-5-sonnet", "exact"),
         ("some-other-vendor-model", "unknown", "unknown"),
         ("<synthetic>", "synthetic", "synthetic"),
         ("", "synthetic", "synthetic"),
