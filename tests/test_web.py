@@ -5,7 +5,7 @@ import pytest
 
 flask = pytest.importorskip("flask")
 
-from conftest import SESSION_ID, assistant_line, build_sample_session, text_block, usage, write_jsonl  # noqa: E402
+from conftest import SESSION_ID, assistant_line, build_sample_session, text_block, usage  # noqa: E402
 from tokenlens.web import Store, create_app  # noqa: E402
 
 
@@ -28,11 +28,20 @@ def test_dashboard_renders(client):
     assert "Claude Haiku 4.5" in html  # what-if table
 
 
-def test_dashboard_day_filter_empty_state(client):
-    # The sample session is dated 2026-09-01; a 1-day window from "now" excludes it
-    # only if now is after 2026-09-02, which it is for any realistic clock.
+def test_dashboard_day_filter_scopes_findings_too(client):
+    # The sample session is dated 2026-09-01, so a 1-day window excludes it.
+    # Totals, findings, and the avoidable KPI must all describe the same
+    # (empty) set of sessions.
     resp = client.get("/?days=1")
     assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert "No sessions found in the last 1 days" in html
+    assert "Re-read an unchanged file" not in html
+
+    summary = client.get("/api/summary?days=1").get_json()
+    assert summary["session_count"] == 0
+    assert summary["findings"] == []
+    assert summary["estimated_avoidable"] == 0
 
 
 def test_session_page_and_prefix_lookup(client):
@@ -90,10 +99,13 @@ def test_upload_parses_in_memory_and_redirects(client):
     assert "uploaded-session" in page.get_data(as_text=True)
 
 
-def test_upload_rejects_empty_and_missing(client):
+def test_upload_rejects_empty_and_missing_without_storing(client):
     assert client.post("/upload", data={}, content_type="multipart/form-data").status_code == 400
-    data = {"file": (io.BytesIO(b'{"type": "queue-operation"}\n'), "empty.jsonl")}
+    data = {"file": (io.BytesIO(b'{"type": "queue-operation"}\n'), "junk-upload.jsonl")}
     assert client.post("/upload", data=data, content_type="multipart/form-data").status_code == 400
+    # A rejected upload must not linger as an empty session.
+    assert client.get("/session/junk-upload").status_code == 404
+    assert all(s["session_id"] != "junk-upload" for s in client.get("/api/sessions").get_json())
 
 
 def test_store_reuses_cache_until_file_changes(sample_session_path):

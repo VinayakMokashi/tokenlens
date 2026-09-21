@@ -18,13 +18,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from ..analysis import AggregateReport, SessionReport, aggregate, analyze_session
+from ..analysis import AggregateReport, SessionReport, aggregate, analyze_session, filter_sessions
 from ..discovery import SessionRef, find_sessions, load_session, projects_root
 from ..export import aggregate_to_dict, jsonable, session_report_to_dict
 from ..findings import Finding, detect_findings, total_estimated_savings
 from ..formatting import duration, money, pct, shorten, signed_money, tokens, when
 from ..models import Session
-from ..parser import iter_json_lines, parse_entries
+from ..parser import parse_entries
 from ..pricing import DEFAULT_TABLE, PricingTable
 
 try:  # pragma: no cover - import guard exercised by the CLI
@@ -43,7 +43,12 @@ class _Entry:
 
 @dataclass
 class Store:
-    """In-memory cache of parsed sessions keyed by session ID."""
+    """In-memory cache of parsed sessions keyed by session ID.
+
+    Parsing happens outside the lock so a slow refresh (a freshly written
+    200 MB transcript) never blocks other requests; the lock only guards
+    the dictionary swap.
+    """
 
     root: Path
     pricing: PricingTable = DEFAULT_TABLE
@@ -62,29 +67,41 @@ class Store:
                 continue
         return (str(ref.path), ref.mtime, ref.size, tuple(subs))
 
+    def _build(self, session: Session, signature: Tuple) -> _Entry:
+        return _Entry(
+            signature=signature,
+            session=session,
+            report=analyze_session(session, self.pricing),
+            findings=detect_findings(session, self.pricing),
+        )
+
     def refresh(self) -> None:
         refs = find_sessions(self.root)
         with self.lock:
-            seen = set()
-            for ref in refs:
-                sig = self._signature(ref)
-                seen.add(ref.session_id)
-                cached = self.entries.get(ref.session_id)
-                if cached is not None and cached.signature == sig:
-                    continue
-                session = load_session(ref, self.pricing)
-                self.entries[ref.session_id] = _Entry(
-                    signature=sig,
-                    session=session,
-                    report=analyze_session(session, self.pricing),
-                    findings=detect_findings(session, self.pricing),
-                )
+            current = dict(self.entries)
+
+        stale: List[Tuple[SessionRef, Tuple]] = []
+        seen = set()
+        for ref in refs:
+            sig = self._signature(ref)
+            seen.add(ref.session_id)
+            cached = current.get(ref.session_id)
+            if cached is None or cached.signature != sig:
+                stale.append((ref, sig))
+
+        rebuilt = {ref.session_id: self._build(load_session(ref, self.pricing), sig) for ref, sig in stale}
+
+        with self.lock:
             for gone in set(self.entries) - seen:
                 del self.entries[gone]
+            self.entries.update(rebuilt)
+
+    def _all_entries(self) -> List[_Entry]:
+        with self.lock:
+            return list(self.entries.values()) + list(self.uploaded.values())
 
     def sessions(self) -> List[Session]:
-        with self.lock:
-            items = list(self.entries.values()) + list(self.uploaded.values())
+        items = self._all_entries()
         items.sort(key=lambda e: (e.session.ended_at.timestamp() if e.session.ended_at else 0), reverse=True)
         return [e.session for e in items]
 
@@ -98,6 +115,8 @@ class Store:
         return entry
 
     def add_uploaded(self, name: str, lines: Sequence[str]) -> Session:
+        """Parse an uploaded transcript in memory. It is only kept when it
+        contains billed API calls, so a rejected upload leaves no trace."""
         entries = []
         for raw in lines:
             raw = raw.strip()
@@ -111,31 +130,29 @@ class Store:
         session.session_id = session.session_id or Path(name).stem
         if not session.title:
             session.title = Path(name).name
-        with self.lock:
-            self.uploaded[session.session_id] = _Entry(
-                signature=("upload", name),
-                session=session,
-                report=analyze_session(session, self.pricing),
-                findings=detect_findings(session, self.pricing),
-            )
+        if session.turns:
+            entry = self._build(session, ("upload", name))
+            with self.lock:
+                self.uploaded[session.session_id] = entry
         return session
 
-    def all_findings(self) -> List[Finding]:
-        with self.lock:
-            items = list(self.entries.values()) + list(self.uploaded.values())
+    def findings_for(self, sessions: Sequence[Session]) -> List[Finding]:
+        wanted = {s.session_id for s in sessions}
         findings: List[Finding] = []
-        for e in items:
-            findings.extend(e.findings)
+        for e in self._all_entries():
+            if e.session.session_id in wanted:
+                findings.extend(e.findings)
         findings.sort(key=lambda f: (f.severity_rank, f.est_dollars_saved), reverse=True)
         return findings
 
-    def aggregate(self, days: Optional[int] = None) -> AggregateReport:
-        sessions = self.sessions()
-        if days:
-            from datetime import datetime, timedelta, timezone
-            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-            sessions = [s for s in sessions if s.ended_at and s.ended_at >= cutoff]
-        return aggregate(sessions, self.pricing)
+    def all_findings(self) -> List[Finding]:
+        return self.findings_for(self.sessions())
+
+    def window(self, days: Optional[int] = None) -> Tuple[List[Session], AggregateReport, List[Finding]]:
+        """Sessions, aggregate, and findings for one time window, so every
+        widget on a page describes the same set of sessions."""
+        sessions = filter_sessions(self.sessions(), days=days)
+        return sessions, aggregate(sessions, self.pricing), self.findings_for(sessions)
 
 
 def create_app(projects_dir: Optional[Path] = None, pricing: PricingTable = DEFAULT_TABLE,
@@ -168,13 +185,9 @@ def create_app(projects_dir: Optional[Path] = None, pricing: PricingTable = DEFA
     @app.route("/")
     def dashboard():
         days = request.args.get("days", type=int)
-        report = store().aggregate(days)
-        findings = store().all_findings()
+        _sessions, report, findings = store().window(days)
         chart = {
             "daily": [{"day": d.day.isoformat(), "cost": round(d.cost, 4), "turns": d.turns} for d in report.daily],
-            "projects": [{"name": p.project_path.rstrip("/").split("/")[-1] or p.project_path,
-                          "full": p.project_path, "cost": round(p.cost, 4)} for p in report.by_project[:10]],
-            "models": [{"name": m.model, "cost": round(m.cost.total, 4)} for m in report.by_model if m.cost.total > 0],
         }
         return render_template(
             "dashboard.html", report=report, findings=findings[:12],
@@ -184,8 +197,9 @@ def create_app(projects_dir: Optional[Path] = None, pricing: PricingTable = DEFA
 
     @app.route("/findings")
     def findings_page():
-        findings = store().all_findings()
-        total = sum(s.total_cost_with_subagents for s in store().sessions())
+        sessions = store().sessions()
+        findings = store().findings_for(sessions)
+        total = sum(s.total_cost_with_subagents for s in sessions)
         return render_template("findings.html", findings=findings, total=total,
                                avoidable=total_estimated_savings(findings), active="findings")
 
@@ -199,12 +213,6 @@ def create_app(projects_dir: Optional[Path] = None, pricing: PricingTable = DEFA
             "context": [{"turn": p.turn_index, "context": p.context_tokens, "cost": round(p.cost, 5),
                          "carry": round(p.carry_cost, 5), "compaction": p.compaction_before,
                          "model": p.model} for p in report.context],
-            "categories": [
-                {"name": "Cache read (carrying context)", "cost": round(report.cost.cache_read_cost, 4)},
-                {"name": "Cache write", "cost": round(report.cost.cache_write_cost, 4)},
-                {"name": "Output (incl. thinking)", "cost": round(report.cost.output_cost, 4)},
-                {"name": "Fresh input", "cost": round(report.cost.input_cost, 4)},
-            ],
         }
         return render_template(
             "session.html", s=session, report=report, findings=findings,
@@ -233,11 +241,12 @@ def create_app(projects_dir: Optional[Path] = None, pricing: PricingTable = DEFA
     @app.route("/api/summary")
     def api_summary():
         days = request.args.get("days", type=int)
-        return jsonify(aggregate_to_dict(store().aggregate(days), store().all_findings()))
+        _sessions, report, findings = store().window(days)
+        return jsonify(aggregate_to_dict(report, findings))
 
     @app.route("/api/sessions")
     def api_sessions():
-        report = store().aggregate()
+        _sessions, report, _findings = store().window(None)
         return jsonify(jsonable(report.sessions))
 
     @app.route("/api/session/<session_id>")
