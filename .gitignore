@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Session transcripts are personal data and must never be committed.
+# The synthetic fixtures under tests/fixtures/ are the only exception.
+*.jsonl
+!tests/fixtures/*.jsonl
+
+# Local analysis cache and exports
+.tokenlens/
+exports/
+*.csv
