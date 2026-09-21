@@ -1,0 +1,23 @@
+{# Renders a list of findings. Set show_provenance to link each finding to its session. #}
+{% if not findings %}
+  <p class="empty">No notable inefficiencies detected.</p>
+{% else %}
+  {% for f in findings %}
+  <div class="finding">
+    <div class="finding-head">
+      <span class="badge {{ f.severity }}">{{ f.severity }}</span>
+      <span class="finding-title">{{ f.title }}</span>
+      {% if f.est_dollars_saved >= 0.005 %}<span class="savings">~{{ f.est_dollars_saved|money }} avoidable</span>{% endif %}
+    </div>
+    <div class="finding-detail">{{ f.detail }}</div>
+    <div class="finding-meta">
+      {% if show_provenance %}
+        <a href="{{ url_for('session_page', session_id=f.session_id) }}">{{ f.project_path.rstrip('/').split('/')[-1] if f.project_path else 'session' }} / {{ f.session_id[:8] }}</a>
+        &middot;
+      {% endif %}
+      {% if f.turns %}turn{{ 's' if f.turns|length > 1 else '' }} {{ f.turns[:6]|join(', ') }}{% if f.turns|length > 6 %} ...{% endif %} &middot; {% endif %}
+      rule: {{ f.rule }}
+    </div>
+  </div>
+  {% endfor %}
+{% endif %}

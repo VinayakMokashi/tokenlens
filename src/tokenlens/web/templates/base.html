@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}tokenlens{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='charts.js') }}" defer></script>
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="{{ url_for('dashboard') }}">tokenlens<small>Claude Code usage</small></a>
+    <div class="nav-links">
+      <a href="{{ url_for('dashboard') }}" class="{{ 'active' if active == 'dashboard' else '' }}">Dashboard</a>
+      <a href="{{ url_for('findings_page') }}" class="{{ 'active' if active == 'findings' else '' }}">Findings</a>
+    </div>
+    <div class="nav-right">
+      <form class="upload-form" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".jsonl" required>
+        <button class="btn" type="submit">Analyze file</button>
+      </form>
+      <form method="post" action="{{ url_for('refresh') }}">
+        <button class="btn" type="submit" title="Rescan the transcripts directory">Rescan</button>
+      </form>
+    </div>
+  </nav>
+  <main class="container">
+    {% block content %}{% endblock %}
+    <p class="disclaimer">
+      Costs are API-equivalent estimates from recorded token counts at public per-token rates.
+      Subscription (Pro/Max) users pay a flat fee; the figures show what the same usage would cost on
+      the API and how sessions compare. Nothing leaves this machine.
+    </p>
+  </main>
+</body>
+</html>

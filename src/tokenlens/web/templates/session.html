@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}{{ (s.title or s.session_id[:8])|shorten(60) }} - tokenlens{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('dashboard') }}">&larr; Dashboard</a></p>
+<h1 class="page-title">{{ s.title or s.first_prompt|shorten(80) or 'Untitled session' }}</h1>
+<p class="page-sub">
+  <code>{{ s.project_path or s.project_dir }}</code> &middot; session <code>{{ s.session_id }}</code><br>
+  {{ s.started_at|when }} to {{ s.ended_at|when }} &middot; active {{ s.active_duration()|duration }} (wall {{ s.wall_duration|duration }})
+  &middot; {{ report.turn_count }} API calls for {{ s.user_prompt_count }} prompts
+  &middot; {{ s.subagents|length }} subagents &middot; {{ s.compactions|length }} compactions &middot; {{ s.api_errors|length }} API errors
+  {% if s.models %}&middot; models: <code>{{ s.models|join(', ') }}</code>{% endif %}
+  {% if s.git_branch %}&middot; branch <code>{{ s.git_branch }}</code>{% endif %}
+</p>
+
+<div class="kpis">
+  <div class="kpi">
+    <div class="label">API-equivalent cost</div>
+    <div class="value">{{ report.cost.total|money }}</div>
+    <div class="sub">{% if s.subagents %}{{ report.cost_with_subagents.total|money }} including {{ s.subagents|length }} subagents{% else %}no subagents{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Carrying context</div>
+    <div class="value">{{ report.carry_share|pct }}</div>
+    <div class="sub">{{ report.carry_cost|money }} re-reading existing context; {{ report.new_work_cost|money }} new work</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Peak context</div>
+    <div class="value">{{ report.peak_context|tokens }}</div>
+    <div class="sub">mean {{ report.mean_context|int|tokens }} tokens per call &middot; cache hit {{ report.cache_hit_rate|pct(1) }}</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Estimated avoidable</div>
+    <div class="value">{{ avoidable|money }}</div>
+    <div class="sub {{ 'good' if avoidable > 0 else '' }}">{{ findings|length }} findings</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Context window per API call</h2>
+  <div class="chart-wrap h-300"><canvas id="context-chart" role="img" aria-label="Context tokens per turn"></canvas></div>
+  <p class="note">Each point is the prompt size the model received on that call (fresh input + cache read + cache write). Vertical lines mark compactions.</p>
+  <div class="chart-wrap h-220" style="margin-top:12px"><canvas id="turn-cost-chart" role="img" aria-label="Cost per turn"></canvas></div>
+  <p class="note">Cost per API call. The steady floor under long stretches is the carry cost of the context above.</p>
+</div>
+
+<div class="grid grid-2" style="margin-top:16px">
+  <div class="card">
+    <h2>Cost by category</h2>
+    <table>
+      <thead><tr><th>Category</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Share</th></tr></thead>
+      <tbody>
+        {% set total = report.cost.total or 1 %}
+        <tr><td>Cache read (carrying context)</td><td class="num">{{ report.usage.cache_read_tokens|tokens }}</td><td class="num">{{ report.cost.cache_read_cost|money }}</td><td class="num">{{ (report.cost.cache_read_cost / total)|pct }}</td></tr>
+        <tr><td>Cache write (1h) <span class="dim">2x input rate</span></td><td class="num">{{ report.usage.cache_write_1h_tokens|tokens }}</td><td class="num" colspan="2"></td></tr>
+        <tr><td>Cache write (5m) <span class="dim">1.25x input rate</span></td><td class="num">{{ report.usage.cache_write_5m_tokens|tokens }}</td><td class="num" colspan="2"></td></tr>
+        <tr><td>Cache write (all)</td><td class="num">{{ report.usage.cache_write_tokens|tokens }}</td><td class="num">{{ report.cost.cache_write_cost|money }}</td><td class="num">{{ (report.cost.cache_write_cost / total)|pct }}</td></tr>
+        <tr><td>Fresh input</td><td class="num">{{ report.usage.input_tokens|tokens }}</td><td class="num">{{ report.cost.input_cost|money }}</td><td class="num">{{ (report.cost.input_cost / total)|pct }}</td></tr>
+        <tr><td>Output (incl. thinking)</td><td class="num">{{ report.usage.output_tokens|tokens }}</td><td class="num">{{ report.cost.output_cost|money }}</td><td class="num">{{ (report.cost.output_cost / total)|pct }}</td></tr>
+      </tbody>
+    </table>
+    <p class="note">Cache saved {{ report.cost.cache_savings|money }} compared with sending the same context as fresh input.</p>
+  </div>
+  <div class="card">
+    <h2>By model (including subagents)</h2>
+    <table>
+      <thead><tr><th>Model</th><th class="num">Turns</th><th class="num">Context</th><th class="num">Output</th><th class="num">Cost</th></tr></thead>
+      <tbody>
+      {% for m in report.by_model %}
+        <tr><td class="mono">{{ m.model }}{% if m.is_estimate %} *{% endif %}</td><td class="num">{{ m.turns }}</td><td class="num">{{ m.usage.context_tokens|tokens }}</td><td class="num">{{ m.usage.output_tokens|tokens }}</td><td class="num">{{ m.cost.total|money }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <h2 style="margin-top:18px">Same conversation on another model</h2>
+    <table>
+      <thead><tr><th>Model</th><th class="num">Cost</th><th class="num">vs. actual</th></tr></thead>
+      <tbody>
+      {% for w in report.what_if %}
+        <tr><td>{{ w.display }}</td><td class="num">{{ w.cost|money }}</td><td class="num">{{ w.delta|signed_money }}{% if w.delta_pct is not none %} ({{ "%+.0f"|format(w.delta_pct) }}%){% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="note">First-order estimate with token counts held fixed.</p>
+  </div>
+</div>
+
+<div class="grid grid-2" style="margin-top:16px">
+  <div class="card">
+    <h2>Phases between compactions</h2>
+    <table>
+      <thead><tr><th>Phase</th><th>Turns</th><th class="num">Start</th><th class="num">Peak</th><th class="num">End</th><th class="num">Cost</th></tr></thead>
+      <tbody>
+      {% for p in report.phases %}
+        <tr><td>{{ p.index }}</td><td>{{ p.first_turn }}-{{ p.last_turn }} ({{ p.turns }})</td><td class="num">{{ p.start_context|tokens }}</td><td class="num">{{ p.peak_context|tokens }}</td><td class="num">{{ p.end_context|tokens }}</td><td class="num">{{ p.cost|money }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% for c in s.compactions %}
+      <p class="note">Compaction after turn {{ c.after_turn }} ({{ c.trigger or 'unknown' }}): {{ c.pre_tokens|tokens }} &rarr; {{ c.post_tokens|tokens }} tokens at {{ c.timestamp|when }}.</p>
+    {% endfor %}
+    {% if s.api_errors %}
+      <p class="note">API errors: {% for e in s.api_errors %}{{ e.status or '?' }} {{ e.error }} at {{ e.timestamp|when }}{{ '; ' if not loop.last }}{% endfor %}.</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h2>Tool calls (this conversation)</h2>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Errors</th><th class="num">~Tokens into context</th><th>Largest result</th></tr></thead>
+      <tbody>
+      {% for t in report.tools[:12] %}
+        <tr><td>{{ t.name }}</td><td class="num">{{ t.calls }}</td><td class="num">{{ t.errors or '' }}</td><td class="num">{{ t.est_result_tokens|tokens }}</td><td class="mono" title="{{ t.largest_target }}">{{ "{:,}".format(t.largest_result_chars) }} {{ t.largest_target|shorten(30) }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <h2>Findings</h2>
+  {% with show_provenance = false %}{% include "_findings.html" %}{% endwith %}
+</div>
+
+{% if s.subagents %}
+<div class="card" style="margin-top:16px">
+  <h2>Subagents</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Agent</th><th>Workflow</th><th>Model</th><th class="num">Turns</th><th class="num">Context</th><th class="num">Output</th><th class="num">Cost</th><th>First prompt</th></tr></thead>
+    <tbody>
+    {% for a in s.subagents|sort(attribute='total_cost', reverse=true) %}
+      <tr>
+        <td class="mono">{{ a.agent_id[:12] }}</td>
+        <td class="mono">{{ a.workflow_id[:16] if a.workflow_id else '' }}</td>
+        <td class="mono">{{ a.models|join(', ') }}</td>
+        <td class="num">{{ a.turns|length }}</td>
+        <td class="num">{{ a.usage.context_tokens|tokens }}</td>
+        <td class="num">{{ a.usage.output_tokens|tokens }}</td>
+        <td class="num">{{ a.total_cost|money }}</td>
+        <td>{{ a.first_prompt|shorten(60) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card" style="margin-top:16px">
+  <details>
+    <summary>All {{ turns|length }} API calls</summary>
+    <div class="table-scroll" style="margin-top:10px">
+    <table>
+      <thead><tr><th class="num">#</th><th>Time</th><th>Model</th><th>Kind</th><th class="num">Context</th><th class="num">Cache read</th><th class="num">Cache write</th><th class="num">Output</th><th class="num">Cost</th><th>Tools</th></tr></thead>
+      <tbody>
+      {% for t in turns %}
+        <tr>
+          <td class="num">{{ t.index }}</td>
+          <td>{{ t.timestamp|when }}</td>
+          <td class="mono">{{ t.model|replace('claude-', '') }}</td>
+          <td>{{ t.kind }}</td>
+          <td class="num">{{ t.context_tokens|tokens }}</td>
+          <td class="num">{{ t.usage.cache_read_tokens|tokens }}</td>
+          <td class="num">{{ t.usage.cache_write_tokens|tokens }}</td>
+          <td class="num">{{ t.usage.output_tokens|tokens }}</td>
+          <td class="num">{{ t.cost.total|money }}</td>
+          <td class="mono">{% for c in t.tool_calls %}<span title="{{ c.target }}">{{ c.name }}{% if c.is_error %}!{% endif %}</span>{{ ' ' }}{% endfor %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+</div>
+
+<script>
+  window.TL_DATA = {{ chart|tojson }};
+  document.addEventListener("DOMContentLoaded", function () {
+    if (window.tlContextChart) tlContextChart("context-chart", window.TL_DATA.context);
+    if (window.tlTurnCostChart) tlTurnCostChart("turn-cost-chart", window.TL_DATA.context);
+  });
+</script>
+{% endblock %}

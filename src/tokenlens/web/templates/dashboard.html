@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - tokenlens{% endblock %}
+{% block content %}
+<h1 class="page-title">Dashboard</h1>
+<p class="page-sub">Every Claude Code session under <code>{{ root }}</code>, including subagent transcripts.</p>
+
+<div class="filters">
+  <span class="dim">Range:</span>
+  <a href="{{ url_for('dashboard') }}" class="{{ 'active' if not days else '' }}">All time</a>
+  {% for n in (7, 30, 90) %}
+  <a href="{{ url_for('dashboard', days=n) }}" class="{{ 'active' if days == n else '' }}">Last {{ n }} days</a>
+  {% endfor %}
+</div>
+
+{% if report.session_count == 0 %}
+  <div class="card"><p class="empty">No sessions found{% if days %} in the last {{ days }} days{% endif %}. Point tokenlens at your transcripts with <code>--projects-dir</code>, or upload a .jsonl file above.</p></div>
+{% else %}
+
+<div class="kpis">
+  <div class="kpi">
+    <div class="label">API-equivalent spend</div>
+    <div class="value">{{ report.total_cost|money }}</div>
+    <div class="sub">{{ report.session_count }} sessions &middot; {{ "{:,}".format(report.turn_count) }} API calls</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Carrying context</div>
+    <div class="value">{{ (report.cost.cache_read_cost / report.total_cost if report.total_cost else 0)|pct }}</div>
+    <div class="sub">{{ report.cost.cache_read_cost|money }} of cache reads re-sending existing context</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Subagents</div>
+    <div class="value">{{ report.total_subagent_cost|money }}</div>
+    <div class="sub">{{ (report.total_subagent_cost / report.total_cost if report.total_cost else 0)|pct }} of spend</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Estimated avoidable</div>
+    <div class="value">{{ avoidable|money }}</div>
+    <div class="sub {{ 'good' if avoidable > 0 else '' }}">{{ finding_count }} findings across sessions</div>
+  </div>
+</div>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Daily spend</h2>
+    <div class="chart-wrap h-260"><canvas id="daily-chart" aria-label="Daily API-equivalent cost" role="img"></canvas></div>
+    <p class="note">{{ report.daily|length }} active days{% if report.daily %}, {{ report.daily[0].day }} to {{ report.daily[-1].day }}{% endif %}. Hover a bar for the exact value.</p>
+  </div>
+  <div class="card">
+    <h2>Spend by project</h2>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Project</th><th class="num">Sessions</th><th class="num">Cost</th><th></th></tr></thead>
+      <tbody>
+      {% set top = report.by_project[0].cost if report.by_project else 1 %}
+      {% for p in report.by_project[:10] %}
+        <tr>
+          <td title="{{ p.project_path }}">{{ (p.project_path.rstrip('/').split('/')[-1] or p.project_path)|shorten(28) }}</td>
+          <td class="num">{{ p.sessions }}</td>
+          <td class="num">{{ p.cost|money }}</td>
+          <td><div class="bar-cell"><div class="bar-track"><div class="bar-fill" style="width: {{ (p.cost / top * 100) if top else 0 }}%"></div></div></div></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-2" style="margin-top:16px">
+  <div class="card">
+    <h2>Spend by model</h2>
+    <table>
+      <thead><tr><th>Model</th><th class="num">Turns</th><th class="num">Cost</th><th class="num">Share</th></tr></thead>
+      <tbody>
+      {% for m in report.by_model %}
+        <tr>
+          <td class="mono">{{ m.model }}{% if m.is_estimate %} <span class="dim" title="rates estimated from model family">*</span>{% endif %}</td>
+          <td class="num">{{ "{:,}".format(m.turns) }}</td>
+          <td class="num">{{ m.cost.total|money }}</td>
+          <td class="num">{{ (m.cost.total / report.total_cost if report.total_cost else 0)|pct }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if report.has_estimated_pricing %}<p class="note">* Some model IDs are not in the pricing table; their costs use family rates.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Everything on one model</h2>
+    <table>
+      <thead><tr><th>Model</th><th class="num">Cost</th><th class="num">vs. actual</th></tr></thead>
+      <tbody>
+      {% for w in report.what_if %}
+        <tr>
+          <td>{{ w.display }}</td>
+          <td class="num">{{ w.cost|money }}</td>
+          <td class="num">{{ w.delta|signed_money }}{% if w.delta_pct is not none %} ({{ "%+.0f"|format(w.delta_pct) }}%){% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="note">First-order estimate: the same token counts re-priced at each model's rates. Tokenizers and turn counts differ across models.</p>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <h2>Top findings</h2>
+  {% with show_provenance = true %}{% include "_findings.html" %}{% endwith %}
+  {% if finding_count > findings|length %}<p class="note"><a href="{{ url_for('findings_page') }}">See all {{ finding_count }} findings</a></p>{% endif %}
+</div>
+
+<div class="card" style="margin-top:16px">
+  <h2>Sessions</h2>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Session</th><th>Last active</th><th>Project</th><th>Title</th><th class="num">Turns</th><th class="num">Peak context</th><th class="num">Cost</th><th class="num">Subagents</th></tr>
+    </thead>
+    <tbody>
+    {% for s in report.sessions %}
+      <tr>
+        <td class="mono"><a href="{{ url_for('session_page', session_id=s.session_id) }}">{{ s.session_id[:8] }}</a></td>
+        <td>{{ s.ended_at|when(false) }}</td>
+        <td title="{{ s.project_path }}">{{ (s.project_path.rstrip('/').split('/')[-1] if s.project_path else '-')|shorten(24) }}</td>
+        <td>{{ (s.title or '-')|shorten(48) }}</td>
+        <td class="num">{{ s.turns }}</td>
+        <td class="num">{{ s.peak_context|tokens }}</td>
+        <td class="num">{{ s.cost|money }}</td>
+        <td class="num">{% if s.subagent_cost %}{{ s.subagent_cost|money }} <span class="dim">({{ s.subagents }})</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<script>
+  window.TL_DATA = {{ chart|tojson }};
+  document.addEventListener("DOMContentLoaded", function () {
+    if (window.tlDailyChart) tlDailyChart("daily-chart", window.TL_DATA.daily);
+  });
+</script>
+{% endif %}
+{% endblock %}
