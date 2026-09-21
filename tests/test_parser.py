@@ -270,3 +270,14 @@ def test_turn_kind_classification():
     ]
     kinds = [t.kind for t in parse_entries(entries).turns]
     assert kinds == ["tool_use", "thinking", "text"]
+
+
+def test_synthetic_placeholder_lines_are_not_turns():
+    entries = [
+        assistant_line("m1", "2026-09-01T10:00:00Z", text_block("real"), usage(output_tokens=5)),
+        assistant_line("local-uuid", "2026-09-01T10:00:01Z", text_block("No response requested."),
+                       usage(), model="<synthetic>"),
+    ]
+    session = parse_entries(entries)
+    assert [t.message_id for t in session.turns] == ["m1"]
+    assert session.models == ["claude-opus-5"]
