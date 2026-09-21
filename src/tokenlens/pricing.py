@@ -232,10 +232,8 @@ class PricingTable:
             input_cost=usage.input_tokens / MILLION * rates.input,
             output_cost=usage.output_tokens / MILLION * rates.output,
             cache_read_cost=usage.cache_read_tokens / MILLION * rates.cache_read,
-            cache_write_cost=(
-                usage.cache_write_5m_tokens / MILLION * rates.cache_write_5m
-                + usage.cache_write_1h_tokens / MILLION * rates.cache_write_1h
-            ),
+            cache_write_5m_cost=usage.cache_write_5m_tokens / MILLION * rates.cache_write_5m,
+            cache_write_1h_cost=usage.cache_write_1h_tokens / MILLION * rates.cache_write_1h,
             uncached_read_cost=usage.cache_read_tokens / MILLION * rates.input,
         )
 

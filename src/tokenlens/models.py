@@ -72,11 +72,19 @@ class CostBreakdown:
     input_cost: float = 0.0
     output_cost: float = 0.0
     cache_read_cost: float = 0.0
-    cache_write_cost: float = 0.0
+    #: Cache writes are kept per TTL tier because they are billed at
+    #: different multipliers (1.25x and 2x input); a token-proportional
+    #: split of one combined figure would be wrong whenever both appear.
+    cache_write_5m_cost: float = 0.0
+    cache_write_1h_cost: float = 0.0
     #: What ``cache_read_tokens`` would have cost as ordinary input. The
     #: difference between this and ``cache_read_cost`` is the money the
     #: cache saved on this call.
     uncached_read_cost: float = 0.0
+
+    @property
+    def cache_write_cost(self) -> float:
+        return self.cache_write_5m_cost + self.cache_write_1h_cost
 
     @property
     def total(self) -> float:
@@ -91,7 +99,8 @@ class CostBreakdown:
             input_cost=self.input_cost + other.input_cost,
             output_cost=self.output_cost + other.output_cost,
             cache_read_cost=self.cache_read_cost + other.cache_read_cost,
-            cache_write_cost=self.cache_write_cost + other.cache_write_cost,
+            cache_write_5m_cost=self.cache_write_5m_cost + other.cache_write_5m_cost,
+            cache_write_1h_cost=self.cache_write_1h_cost + other.cache_write_1h_cost,
             uncached_read_cost=self.uncached_read_cost + other.uncached_read_cost,
         )
 

@@ -51,6 +51,7 @@ def _usage_dict(usage) -> Dict[str, int]:
 
 def _cost_dict(cost) -> Dict[str, float]:
     d = jsonable(cost)
+    d["cache_write_cost"] = cost.cache_write_cost
     d["total"] = cost.total
     d["cache_savings"] = cost.cache_savings
     return d

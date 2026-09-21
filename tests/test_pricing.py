@@ -104,7 +104,9 @@ def test_price_separates_cache_write_tiers():
     assert cost.input_cost == pytest.approx(5.0)
     assert cost.output_cost == pytest.approx(25.0)
     assert cost.cache_read_cost == pytest.approx(5.0)
-    # 5m tier at 1.25x ($6.25) plus 1h tier at 2x ($10.00)
+    # 5m tier at 1.25x ($6.25) plus 1h tier at 2x ($10.00), kept apart.
+    assert cost.cache_write_5m_cost == pytest.approx(6.25)
+    assert cost.cache_write_1h_cost == pytest.approx(10.0)
     assert cost.cache_write_cost == pytest.approx(16.25)
     assert cost.total == pytest.approx(51.25)
     # Reading 10M tokens from cache instead of paying input rate saved $45.

@@ -46,6 +46,8 @@ def test_analyze_json_is_valid_and_complete(capsys, sample_session_path):
     assert data["session"]["session_id"] == SESSION_ID
     assert len(data["turns"]) == 6
     assert data["turns"][0]["usage"]["cache_write_1h_tokens"] == 12_000
+    assert data["turns"][0]["cost"]["cache_write_1h_cost"] == pytest.approx(0.12)
+    assert data["cost"]["cache_write_cost"] == pytest.approx(data["cost"]["cache_write_1h_cost"])
     assert data["metrics"]["peak_context"] == 16_705
     assert {f["rule"] for f in data["findings"]} >= {"duplicate_read", "large_tool_result", "api_errors"}
     assert [w["model"] for w in data["what_if"]] == [
