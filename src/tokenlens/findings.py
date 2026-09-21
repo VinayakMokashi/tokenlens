@@ -218,7 +218,11 @@ def rule_context_bloat(session: Session, pricing: PricingTable, th: Thresholds) 
         ))
 
     for turn in session.turns:
-        if turn.context_tokens >= th.context_bloat_tokens:
+        # Once a run has started, it continues until context falls clearly
+        # below the threshold (10% margin), so a single turn dipping a few
+        # hundred tokens under the line does not split one long run in two.
+        limit = th.context_bloat_tokens * (0.9 if run else 1.0)
+        if turn.context_tokens >= limit:
             run.append(turn)
         else:
             flush()
@@ -228,18 +232,26 @@ def rule_context_bloat(session: Session, pricing: PricingTable, th: Thresholds) 
 
 
 def rule_context_rewrites(session: Session, pricing: PricingTable, th: Thresholds) -> List[Finding]:
-    """A turn after the first with zero cache reads but a large cache write
-    means the whole context was written again at the 1-hour rate instead
-    of being read at a tenth of the price. Two causes, reported
-    separately: the cache expired during a break, or the model changed
-    (prompt caches are per model). Neither is counted as avoidable; the
-    finding explains the cost so the user can weigh it."""
+    """A turn that reads far less from cache than the previous turn's
+    context, and writes a large amount instead, re-wrote the conversation
+    at the 1-hour rate rather than reading it at a tenth of the price.
+
+    The test is relative to the previous context rather than "zero cache
+    reads" because Claude Code keeps a shared prefix (system prompt and
+    tools, ~28K tokens) cached across conversations, so a miss on the
+    conversation itself still shows a small read.
+
+    Causes are reported separately: a model switch (caches are per
+    model), or a cache miss after a break or a change to the prompt
+    prefix. Neither is counted as avoidable; the finding explains the
+    cost so the user can weigh it."""
     out: List[Finding] = []
     previous: Optional[Turn] = None
     for turn in session.turns:
         u = turn.usage
-        if (previous is not None and u.cache_read_tokens == 0
-                and u.cache_write_tokens >= th.cache_miss_min_write_tokens):
+        if (previous is not None
+                and u.cache_write_tokens >= th.cache_miss_min_write_tokens
+                and u.cache_read_tokens < previous.context_tokens * 0.5):
             rates = pricing.resolve(turn.model, turn.speed).rates
             as_read = u.cache_write_tokens / MILLION * rates.cache_read
             paid = turn.cost.cache_write_cost
@@ -263,22 +275,31 @@ def rule_context_rewrites(session: Session, pricing: PricingTable, th: Threshold
                     evidence={**evidence, "from_model": previous.model, "to_model": turn.model},
                 ))
             else:
-                gap = ""
+                cause = ("The conversation's prompt cache was not reused, so the context was "
+                         "written again")
                 if previous.timestamp and turn.timestamp:
                     delta: timedelta = turn.timestamp - previous.timestamp
-                    hours = delta.total_seconds() / 3600
-                    gap = (f" after a {hours:.1f} hour gap" if hours >= 1
-                           else f" after a {delta.total_seconds() / 60:.0f} minute gap")
+                    minutes = delta.total_seconds() / 60
+                    evidence["gap_minutes"] = round(minutes, 1)
+                    if minutes >= 60:
+                        cause = (f"It came {minutes / 60:.1f} hours after the previous call, longer than "
+                                 f"the one-hour cache lifetime, so the context was written again")
+                    else:
+                        cause = (f"It came only {minutes:.0f} minutes after the previous call, so the cache "
+                                 f"was most likely invalidated rather than expired: something early in the "
+                                 f"prompt changed (tool list, MCP servers, settings, effort level) or the "
+                                 f"entry was evicted. The context was written again")
                 out.append(Finding(
-                    rule="cache_expired",
+                    rule="cache_miss",
                     severity="info",
-                    title=f"Cache expired: {fmt_tokens(u.cache_write_tokens)} tokens re-written",
+                    title=(f"Cache miss: {fmt_tokens(u.cache_write_tokens)} tokens re-written "
+                           f"(~{money(extra)} extra)"),
                     detail=(
-                        f"Turn {turn.index} resumed{gap}. The prompt cache had expired, so the entire "
-                        f"{u.cache_write_tokens:,}-token context was written again for {money(paid)} "
-                        f"instead of {money(as_read)} as a cache read, about {money(extra)} extra. Cache "
-                        f"entries live for at most an hour; after a long break this cost is unavoidable, "
-                        f"but when you know you will be back within the hour, keep the session warm."
+                        f"Turn {turn.index} read only {u.cache_read_tokens:,} tokens from cache although the "
+                        f"previous call carried {previous.context_tokens:,}. {cause} for {money(paid)} "
+                        f"instead of {money(as_read)} as a cache read. After a long break this is "
+                        f"unavoidable; if misses repeat within minutes, look for settings or tools that "
+                        f"change mid-session."
                     ),
                     turns=[turn.index],
                     evidence=evidence,

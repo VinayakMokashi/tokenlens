@@ -105,8 +105,8 @@ tokenlens is built around that observation:
   session. On a machine that uses workflows they can be a third of total
   spend.
 - **Dollar-quantified findings.** Context bloat, duplicate file reads (a
-  re-read after an edit is not flagged), large tool results, cache expiry
-  after breaks, error streaks, heavy thinking, subagent share, and API
+  re-read after an edit is not flagged), large tool results, cache misses
+  and model switches, error streaks, heavy thinking, subagent share, and API
   errors, each with a plain-language explanation and a conservative
   saving estimate.
 - **What-if pricing.** The same conversation re-priced on Fable 5.1, Opus 5,
@@ -229,7 +229,7 @@ family fallbacks.
 | `context_bloat` | warning / critical | Runs of turns with context above 400K tokens | Cache reads above a 60K "healthy" context |
 | `duplicate_read` | warning | A file read again with no Edit/Write to it in between | Write + carry cost of the duplicate |
 | `large_tool_result` | info / warning | A single result over 16K characters | Write + carry cost until the next compaction |
-| `cache_expired` | info | Zero cache reads after the first turn: the cache lapsed during a break | none (explained, not avoidable) |
+| `cache_miss` | info | A call reads far less from cache than the previous call carried and re-writes the rest: a break longer than the cache lifetime, or a change to the prompt prefix | none (explained, not avoidable) |
 | `model_switch` | info | Zero cache reads because the model changed; prompt caches are per model | none (explained) |
 | `error_streak` | warning | Three or more consecutive failing tool calls | none (behavioural) |
 | `thinking_share` | info | Extended thinking above 60% of output tokens, with effort levels used | none (points at the effort setting) |

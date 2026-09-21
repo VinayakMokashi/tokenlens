@@ -122,10 +122,11 @@ def test_cache_expiry_detected_after_gap():
                        usage(input_tokens=10, output_tokens=10, cache_read=0, cache_1h=52_000)),
     ]
     findings = detect_findings(parse_entries(entries))
-    expiry = [f for f in findings if f.rule == "cache_expired"]
+    expiry = [f for f in findings if f.rule == "cache_miss"]
     assert len(expiry) == 1
     assert expiry[0].turns == [3]
-    assert "2.5 hour gap" in expiry[0].detail
+    assert "2.5 hours after the previous call" in expiry[0].detail
+    assert expiry[0].evidence["gap_minutes"] == 149.0
     # Paid 52,000 * $10/M = $0.52 instead of 52,000 * $0.50/M = $0.026. The
     # extra is explained but not claimed as avoidable: after a long break
     # the re-write cannot be prevented.
@@ -145,7 +146,7 @@ def test_model_switch_is_reported_separately_from_cache_expiry():
     ]
     findings = detect_findings(parse_entries(entries))
     rules = _rules(findings)
-    assert "cache_expired" not in rules
+    assert "cache_miss" not in rules
     switch = next(f for f in findings if f.rule == "model_switch")
     assert switch.turns == [2]
     assert "claude-opus-5 to claude-sonnet-5" in switch.detail
@@ -155,7 +156,52 @@ def test_model_switch_is_reported_separately_from_cache_expiry():
 def test_first_turn_is_never_a_cache_miss():
     entries = [assistant_line("m1", "2026-09-01T10:00:00Z", text_block("a"),
                               usage(input_tokens=10, output_tokens=10, cache_1h=500_000))]
-    assert "cache_expired" not in _rules(detect_findings(parse_entries(entries)))
+    assert "cache_miss" not in _rules(detect_findings(parse_entries(entries)))
+
+
+def test_cache_miss_detected_even_when_shared_prefix_is_read():
+    # Claude Code keeps a ~28K system/tools prefix cached across sessions, so
+    # a miss on the conversation still reads that prefix. Real case: turn 183
+    # of a session read 28,023 and re-wrote 371,704 ten minutes after turn 182.
+    entries = [
+        assistant_line("m1", "2026-09-01T10:00:00Z", text_block("a"),
+                       usage(input_tokens=5, output_tokens=10, cache_read=28_000, cache_1h=372_000)),
+        assistant_line("m2", "2026-09-01T10:00:10Z", text_block("b"),
+                       usage(input_tokens=5, output_tokens=10, cache_read=400_000, cache_1h=500)),
+        assistant_line("m3", "2026-09-01T10:10:10Z", text_block("c"),
+                       usage(input_tokens=5, output_tokens=10, cache_read=28_000, cache_1h=372_600)),
+    ]
+    findings = detect_findings(parse_entries(entries))
+    misses = [f for f in findings if f.rule == "cache_miss"]
+    assert [f.turns for f in misses] == [[3]]
+    miss = misses[0]
+    assert "only 10 minutes after the previous call" in miss.detail
+    assert "invalidated rather than expired" in miss.detail
+    # 372,600 1h-write tokens on Opus 5 cost $3.726; as reads they'd cost $0.1863.
+    assert miss.evidence["extra_cost"] == pytest.approx(3.726 - 0.1863)
+    assert "~$3.54 extra" in miss.title
+    assert miss.est_dollars_saved == 0.0
+
+
+def test_large_new_content_is_not_a_cache_miss():
+    # Turn 2 reads all of turn 1's context and adds a big tool result: a large
+    # write, but the cache was reused, so it is not a miss.
+    entries = [
+        assistant_line("m1", "2026-09-01T10:00:00Z", text_block("a"),
+                       usage(input_tokens=5, output_tokens=10, cache_1h=12_000)),
+        assistant_line("m2", "2026-09-01T10:00:10Z", text_block("b"),
+                       usage(input_tokens=5, output_tokens=10, cache_read=12_000, cache_1h=40_000)),
+    ]
+    assert "cache_miss" not in _rules(detect_findings(parse_entries(entries)))
+
+
+def test_bloat_run_is_not_split_by_a_small_dip():
+    contexts = [450_000, 460_000, 399_700, 470_000, 480_000, 300_000]
+    entries = [assistant_line(f"m{i}", f"2026-09-01T10:00:{i:02d}Z", text_block("x"),
+                              usage(input_tokens=5, output_tokens=10, cache_read=c - 1_000, cache_1h=995))
+               for i, c in enumerate(contexts, start=1)]
+    bloat = [f for f in detect_findings(parse_entries(entries)) if f.rule == "context_bloat"]
+    assert [f.turns for f in bloat] == [[1, 5]]
 
 
 def test_error_streak():
