@@ -178,25 +178,35 @@ def tool_target(name: str, tool_input: Any) -> str:
         return ""
 
 
+#: Claude Code logs slash commands (/clear, /model...) and their local
+#: output as user lines wrapped in these tags. They are not prompts to the
+#: model and must not count as prompts or become a session's title.
+_COMMAND_WRAPPER = re.compile(
+    r"^\s*<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>")
+
+
 def _is_human_prompt(entry: Dict[str, Any]) -> bool:
-    """True for a user line typed by the human, not a tool_result carrier."""
+    """True for a user line typed by the human as a prompt: not a
+    tool_result carrier, not meta, and not a slash-command wrapper."""
     if entry.get("isMeta") or entry.get("isCompactSummary"):
         return False
     message = entry.get("message") or {}
     content = message.get("content")
     if isinstance(content, str):
-        return bool(content.strip())
-    if isinstance(content, list):
-        has_text = False
+        text = content
+    elif isinstance(content, list):
+        parts = []
         for block in content:
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_result":
                 return False
-            if block.get("type") == "text" and (block.get("text") or "").strip():
-                has_text = True
-        return has_text
-    return False
+            if block.get("type") == "text":
+                parts.append(block.get("text") or "")
+        text = "\n".join(parts)
+    else:
+        return False
+    return bool(text.strip()) and not _COMMAND_WRAPPER.match(text)
 
 
 def iter_json_lines(path: Path) -> Iterable[Any]:

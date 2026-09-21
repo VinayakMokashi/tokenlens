@@ -391,6 +391,10 @@ def aggregate(sessions: Sequence[Session], pricing: PricingTable = DEFAULT_TABLE
     summaries: List[SessionSummary] = []
 
     for session in sessions:
+        if not session.turns and not session.subagents:
+            # A transcript with no billed calls (only a /clear, say) costs
+            # nothing and would only add an empty row to every listing.
+            continue
         turns = session.all_turns()
         all_turns.extend(turns)
         main_turns.extend(session.turns)

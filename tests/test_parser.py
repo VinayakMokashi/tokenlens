@@ -115,6 +115,21 @@ def test_compactions_and_api_errors(sample_entries):
     assert all(t.model != "<synthetic>" for t in session.turns)
 
 
+def test_slash_commands_are_not_prompts():
+    from conftest import user_prompt_line
+
+    entries = [
+        user_prompt_line("2026-09-01T09:59:00Z",
+                         "<command-name>/clear</command-name>\n<command-message>clear</command-message>"),
+        user_prompt_line("2026-09-01T09:59:01Z", "<local-command-stdout>Set model to opus</local-command-stdout>"),
+        user_prompt_line("2026-09-01T10:00:00Z", "Real question about <command-name> tags"),
+        assistant_line("m1", "2026-09-01T10:00:05Z", text_block("answer"), usage(output_tokens=5)),
+    ]
+    session = parse_entries(entries)
+    assert session.user_prompt_count == 1
+    assert session.first_prompt == "Real question about <command-name> tags"
+
+
 def test_durations(sample_entries):
     session = parse_entries(sample_entries)
     assert session.started_at == datetime(2026, 9, 1, 10, 0, 5, tzinfo=timezone.utc)

@@ -150,6 +150,15 @@ def test_filter_sessions_by_project_and_window(sample_entries):
     assert filter_sessions([a, b], project="other", days=7, now=now) == []
 
 
+def test_aggregate_skips_sessions_without_billed_calls(sample_entries):
+    real = parse_entries(sample_entries)
+    empty = parse_entries([{"type": "user", "message": {"role": "user", "content": "/clear"}}],
+                          path="/tmp/empty.jsonl")
+    report = aggregate([real, empty])
+    assert report.session_count == 1
+    assert [s.session_id for s in report.sessions] == [real.session_id]
+
+
 def test_rolling_window():
     entries = []
     for day in range(1, 11):
